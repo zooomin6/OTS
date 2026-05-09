@@ -6,7 +6,7 @@ import sys
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -116,14 +116,18 @@ async def analyze(body: AnalyzeRequest, db: AsyncSession = Depends(get_db)):
 
 @app.get("/history", response_model=list[HistoryItem], tags=["Analysis"])
 async def get_history(limit: int = Query(default=5, ge=1, le=100), db: AsyncSession = Depends(get_db)):
-    # TODO: SELECT * FROM analyses ORDER BY created_at DESC LIMIT :limit
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    result = await db.execute(
+        select(Analysis).order_by(Analysis.created_at.desc()).limit(limit)
+    )
+    return result.scalars().all()
 
 
 @app.get("/history/{analysis_id}", response_model=AnalyzeResponse, tags=["Analysis"])
 async def get_history_detail(analysis_id: int, db: AsyncSession = Depends(get_db)):
-    # TODO: JOIN analyses + posts WHERE analyses.id = :analysis_id
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    analysis = await db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return analysis
 
 
 # ── Trading ───────────────────────────────────────────────────────────────────
@@ -134,14 +138,19 @@ async def get_trades(
     status: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    # TODO: SELECT * FROM trades ORDER BY executed_at DESC LIMIT :limit
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    stmt = select(Trade).order_by(Trade.executed_at.desc()).limit(limit)
+    if status:
+        stmt = stmt.where(Trade.status == status)
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @app.get("/trades/{trade_id}", response_model=TradeItem, tags=["Trading"])
 async def get_trade_detail(trade_id: int, db: AsyncSession = Depends(get_db)):
-    # TODO: SELECT * FROM trades WHERE id = :trade_id
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    trade = await db.get(Trade, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return trade
 
 
 @app.post("/trades/{analysis_id}/execute", response_model=TradeItem, tags=["Trading"])
@@ -154,8 +163,24 @@ async def execute_trade(analysis_id: int, db: AsyncSession = Depends(get_db)):
 
 @app.get("/status", response_model=StatusResponse, tags=["System"])
 async def get_status(db: AsyncSession = Depends(get_db)):
-    # TODO: SELECT settings + today's daily_stats
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    settings = await db.get(Settings, 1)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Settings not found")
+
+    today = datetime.now(timezone.utc).date()
+    result = await db.execute(select(DailyStat).where(DailyStat.date == today))
+    daily = result.scalar_one_or_none()
+
+    return StatusResponse(
+        mode=settings.mode,
+        is_halted=settings.is_halted,
+        max_trade_amount_krw=settings.max_trade_amount_krw,
+        daily_loss_limit_krw=settings.daily_loss_limit_krw,
+        stop_loss_pct=settings.stop_loss_pct,
+        today_total_trades=daily.total_trades if daily else 0,
+        today_realized_pnl_krw=daily.realized_pnl_krw if daily else 0,
+        crawler_running=False,
+    )
 
 
 @app.get("/settings", response_model=SettingsResponse, tags=["System"])
@@ -168,14 +193,23 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
 
 @app.patch("/settings", response_model=SettingsResponse, tags=["System"])
 async def update_settings(body: SettingsPatch, db: AsyncSession = Depends(get_db)):
-    # TODO: UPDATE settings SET ... WHERE id = 1
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    settings = await db.get(Settings, 1)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Settings not found")
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(settings, field, value)
+    settings.updated_at = datetime.now(timezone.utc)
+    return settings
 
 
 @app.post("/settings/resume", response_model=SettingsResponse, tags=["System"])
 async def resume_trading(db: AsyncSession = Depends(get_db)):
-    # TODO: UPDATE settings SET is_halted = FALSE WHERE id = 1
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    settings = await db.get(Settings, 1)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Settings not found")
+    settings.is_halted = False
+    settings.updated_at = datetime.now(timezone.utc)
+    return settings
 
 
 @app.get("/health", tags=["System"])
