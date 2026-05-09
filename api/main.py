@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import sys
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional
@@ -7,9 +13,11 @@ from typing import Any, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
+from db.models import Settings, Analysis, Trade, DailyStat
 
 app = FastAPI(
     title="AI 코인 투자 어시스턴트",
@@ -152,8 +160,10 @@ async def get_status(db: AsyncSession = Depends(get_db)):
 
 @app.get("/settings", response_model=SettingsResponse, tags=["System"])
 async def get_settings(db: AsyncSession = Depends(get_db)):
-    # TODO: SELECT * FROM settings WHERE id = 1
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    settings = await db.get(Settings, 1)
+    if not settings:
+        raise HTTPException(status_code=404, detail="Settings not found")
+    return settings
 
 
 @app.patch("/settings", response_model=SettingsResponse, tags=["System"])
