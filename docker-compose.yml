@@ -99,6 +99,40 @@ services:
       - .:/app
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
+  selenium:
+    image: selenium/standalone-chrome:latest
+    container_name: coin_selenium
+    restart: unless-stopped
+    shm_size: "2gb"                # Chrome 크래시 방지용 공유 메모리
+    ports:
+      - "4444:4444"                # Selenium Grid UI
+      - "7900:7900"                # noVNC (브라우저로 화면 확인 가능)
+    environment:
+      SE_NODE_MAX_SESSIONS: 2
+      SE_VNC_NO_PASSWORD: 1
+
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    container_name: coin_crawler
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      selenium:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+
 volumes:
   postgres_data:
   redis_data:
