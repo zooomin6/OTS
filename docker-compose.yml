@@ -111,6 +111,24 @@ services:
       SE_NODE_MAX_SESSIONS: 2
       SE_VNC_NO_PASSWORD: 1
 
+  analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile.analysis
+    container_name: coin_analyzer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+
   crawler:
     build:
       context: .
