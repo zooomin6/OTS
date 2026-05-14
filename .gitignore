@@ -153,6 +153,8 @@ cython_debug/
 # .vscode/
 
 # ── 프로젝트 전용 ──────────────────────────────────────────────
+# 크롤러 전용 Chrome 프로필 (로그인 세션 포함, git 제외)
+chrome_profile/
 # Docker volumes (local dev)
 postgres_data/
 redis_data/

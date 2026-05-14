@@ -34,13 +34,17 @@ app.add_middleware(
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
+# API 요청/응답의 데이터 형식을 정의하는 Pydantic 모델.
+# FastAPI가 이 클래스를 기반으로 자동으로 타입 검증 및 직렬화를 처리한다.
 
+# POST /analyze 요청 바디: 분석할 게시글 내용과 채널 정보
 class AnalyzeRequest(BaseModel):
     content: str
     channel_id: str = "manual"
     published_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+# POST /analyze 응답: GPT 분석 결과 (매매 신호, 요약, 시나리오)
 class AnalyzeResponse(BaseModel):
     analysis_id: int
     signal_type: str
@@ -49,6 +53,7 @@ class AnalyzeResponse(BaseModel):
     scenario_json: Any
 
 
+# GET /history 응답 항목: 분석 이력 목록의 개별 항목
 class HistoryItem(BaseModel):
     id: int
     post_id: int
@@ -57,9 +62,10 @@ class HistoryItem(BaseModel):
     created_at: datetime
 
     class Config:
-        from_attributes = True
+        from_attributes = True  # SQLAlchemy 모델을 바로 직렬화할 수 있게 허용
 
 
+# GET /trades 응답 항목: 매매 내역 목록의 개별 항목
 class TradeItem(BaseModel):
     id: int
     analysis_id: int
@@ -75,6 +81,7 @@ class TradeItem(BaseModel):
         from_attributes = True
 
 
+# PATCH /settings 요청 바디: 변경할 설정 항목만 선택적으로 전송 (None이면 변경 안 함)
 class SettingsPatch(BaseModel):
     mode: Optional[str] = Field(None, pattern="^(FULL_AUTO|SEMI_AUTO)$")
     max_trade_amount_krw: Optional[int] = Field(None, gt=0)
@@ -82,6 +89,7 @@ class SettingsPatch(BaseModel):
     stop_loss_pct: Optional[Decimal] = Field(None, gt=0, le=1)
 
 
+# GET /settings 응답: 현재 설정 전체 조회
 class SettingsResponse(BaseModel):
     id: int
     mode: str
@@ -95,6 +103,7 @@ class SettingsResponse(BaseModel):
         from_attributes = True
 
 
+# GET /status 응답: 운영 상태 + 오늘의 매매 통계 요약
 class StatusResponse(BaseModel):
     mode: str
     is_halted: bool
