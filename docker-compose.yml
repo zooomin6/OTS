@@ -111,6 +111,23 @@ services:
       SE_NODE_MAX_SESSIONS: 2
       SE_VNC_NO_PASSWORD: 1
 
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.analysis
+    container_name: coin_telegram_bot
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+    command: python -m notification.telegram_bot
+
   analyzer:
     build:
       context: .
