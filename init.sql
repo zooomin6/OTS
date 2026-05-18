@@ -2,6 +2,7 @@
 -- AI 코인 투자 어시스턴트 — DB 스키마 초기화
 -- PostgreSQL 14+
 -- v2: coin_symbol, price_alerts, post_links, video_memos 추가
+-- v3: 3분할 매수, 유튜버 구간, 기술적 지표 컬럼 추가
 -- =============================================================
 
 -- -----------------------------------------
@@ -27,21 +28,39 @@ CREATE INDEX IF NOT EXISTS idx_posts_post_type     ON posts (post_type);
 -- 2. analyses — GPT 분석 결과
 -- -----------------------------------------
 CREATE TABLE IF NOT EXISTS analyses (
-    id               BIGSERIAL      PRIMARY KEY,
-    post_id          BIGINT         NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
-    signal_type      VARCHAR(10)    NOT NULL CHECK (signal_type IN ('BUY', 'SELL', 'HOLD')),
-    coin_symbol      VARCHAR(20),
-    entry_price_1    DECIMAL(18, 2),
-    entry_price_2    DECIMAL(18, 2),
-    stop_loss_price  DECIMAL(18, 2),
-    take_profit_price DECIMAL(18, 2),
-    scenario_json    JSONB          NOT NULL,
-    summary          TEXT,
-    invalidation     TEXT,
-    raw_response     TEXT,
-    is_active        BOOLEAN        NOT NULL DEFAULT TRUE,
-    expires_at       TIMESTAMP,
-    created_at       TIMESTAMP      NOT NULL DEFAULT NOW()
+    id                  BIGSERIAL      PRIMARY KEY,
+    post_id             BIGINT         NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
+    signal_type         VARCHAR(10)    NOT NULL CHECK (signal_type IN ('BUY', 'SELL', 'HOLD')),
+    coin_symbol         VARCHAR(20),
+    -- 유튜버 제시 구간
+    youtuber_zone_low   DECIMAL(18, 2),
+    youtuber_zone_high  DECIMAL(18, 2),
+    -- 성향별 단일 진입가 (1=안정형, 2=중립형, 3=공격형, 4=초공격형)
+    entry_price_1       DECIMAL(18, 2),
+    entry_price_2       DECIMAL(18, 2),
+    entry_price_3       DECIMAL(18, 2),
+    entry_price_4       DECIMAL(18, 2),
+    entry_ratio_1       SMALLINT,
+    entry_ratio_2       SMALLINT,
+    entry_ratio_3       SMALLINT,
+    -- 손익 기준가
+    absolute_stop       DECIMAL(18, 2),   -- 마지노선 (시즌 종료 레벨)
+    stop_loss_price     DECIMAL(18, 2),
+    take_profit_price   DECIMAL(18, 2),
+    -- 기술적 지표
+    risk_reward_ratio   DECIMAL(6, 2),
+    current_rsi         DECIMAL(5, 2),
+    rsi_signal          VARCHAR(10)    CHECK (rsi_signal IN ('OVERSOLD', 'NEUTRAL', 'OVERBOUGHT')),
+    volume_signal       VARCHAR(10)    CHECK (volume_signal IN ('HIGH', 'NORMAL', 'LOW')),
+    fib_level           DECIMAL(6, 3),
+    -- 요약·시나리오
+    scenario_json       JSONB          NOT NULL,
+    summary             TEXT,
+    invalidation        TEXT,
+    raw_response        TEXT,
+    is_active           BOOLEAN        NOT NULL DEFAULT TRUE,
+    expires_at          TIMESTAMP,
+    created_at          TIMESTAMP      NOT NULL DEFAULT NOW()
 );
 
 -- scenario_json 구조 예시:
@@ -66,7 +85,7 @@ CREATE TABLE IF NOT EXISTS price_alerts (
     coin_symbol  VARCHAR(20)    NOT NULL,
     target_price DECIMAL(18, 2) NOT NULL,
     alert_type   VARCHAR(20)    NOT NULL
-                     CHECK (alert_type IN ('ENTRY_1', 'ENTRY_2', 'STOP_LOSS', 'TAKE_PROFIT')),
+                     CHECK (alert_type IN ('ENTRY_1', 'ENTRY_2', 'ENTRY_3', 'STOP_LOSS', 'TAKE_PROFIT')),
     status       VARCHAR(20)    NOT NULL DEFAULT 'PENDING'
                      CHECK (status IN ('PENDING', 'TRIGGERED', 'CANCELLED')),
     triggered_at TIMESTAMP,
@@ -106,7 +125,56 @@ CREATE INDEX IF NOT EXISTS idx_video_memos_post_id    ON video_memos (post_id);
 CREATE INDEX IF NOT EXISTS idx_video_memos_created_at ON video_memos (created_at DESC);
 
 -- -----------------------------------------
--- 6. trades — 매매 실행 내역
+-- 6. news_articles — 실시간 뉴스 수집
+-- -----------------------------------------
+CREATE TABLE IF NOT EXISTS news_articles (
+    id             BIGSERIAL     PRIMARY KEY,
+    source         VARCHAR(50)   NOT NULL,          -- 'cryptopanic' | 'coindesk' | 'cointelegraph' | 'newsapi'
+    external_id    VARCHAR(255)  UNIQUE,            -- 외부 뉴스 고유 ID (중복 방지)
+    title          TEXT          NOT NULL,
+    summary        TEXT,
+    url            TEXT          NOT NULL,
+    published_at   TIMESTAMP     NOT NULL,
+    sentiment      VARCHAR(10)   CHECK (sentiment IN ('BULLISH', 'BEARISH', 'NEUTRAL')),
+    impact_level   VARCHAR(10)   CHECK (impact_level IN ('HIGH', 'MEDIUM', 'LOW')),
+    related_coins  JSONB         NOT NULL DEFAULT '[]',   -- ["BTC", "ETH"] 등
+    gpt_analysis   TEXT,                            -- GPT 요약 + 영향도 분석
+    is_processed   BOOLEAN       NOT NULL DEFAULT FALSE,
+    collected_at   TIMESTAMP     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_published_at   ON news_articles (published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_source         ON news_articles (source);
+CREATE INDEX IF NOT EXISTS idx_news_impact         ON news_articles (impact_level);
+CREATE INDEX IF NOT EXISTS idx_news_is_processed   ON news_articles (is_processed) WHERE is_processed = FALSE;
+CREATE INDEX IF NOT EXISTS idx_news_related_coins  ON news_articles USING GIN (related_coins);
+
+-- -----------------------------------------
+-- 7. user_profiles — 텔레그램 사용자 투자 성향
+-- -----------------------------------------
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id                   BIGSERIAL     PRIMARY KEY,
+    telegram_user_id     BIGINT        NOT NULL UNIQUE,
+    telegram_username    VARCHAR(100),
+    risk_tolerance       VARCHAR(20)   NOT NULL DEFAULT 'MODERATE'
+                             CHECK (risk_tolerance IN ('CONSERVATIVE', 'MODERATE', 'AGGRESSIVE')),
+    total_asset_krw      BIGINT,                    -- 총 투자 가능 자산 (원)
+    leverage             SMALLINT      NOT NULL DEFAULT 1
+                             CHECK (leverage BETWEEN 1 AND 50),
+    trading_mode         VARCHAR(20)   NOT NULL DEFAULT 'SEMI_AUTO'
+                             CHECK (trading_mode IN ('AUTO', 'SEMI_AUTO', 'MANUAL', 'NOTIFY_ONLY')),
+    auto_ratio           SMALLINT      NOT NULL DEFAULT 50
+                             CHECK (auto_ratio BETWEEN 0 AND 100), -- 자동매매 비중 (%)
+    preferred_coins      JSONB         NOT NULL DEFAULT '[]',       -- 관심 코인 목록
+    onboarding_completed BOOLEAN       NOT NULL DEFAULT FALSE,
+    created_at           TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMP     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_telegram_id ON user_profiles (telegram_user_id);
+
+-- -----------------------------------------
+-- 8. trades — 매매 실행 내역
 -- -----------------------------------------
 CREATE TABLE IF NOT EXISTS trades (
     id              BIGSERIAL      PRIMARY KEY,
@@ -128,7 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_status       ON trades (status);
 CREATE INDEX IF NOT EXISTS idx_trades_executed_at  ON trades (executed_at DESC);
 
 -- -----------------------------------------
--- 7. settings — 시스템 설정 (항상 1행 고정)
+-- 9. settings — 시스템 설정 (항상 1행 고정)
 -- -----------------------------------------
 CREATE TABLE IF NOT EXISTS settings (
     id                   INT            PRIMARY KEY DEFAULT 1,
@@ -147,7 +215,7 @@ VALUES (1)
 ON CONFLICT (id) DO NOTHING;
 
 -- -----------------------------------------
--- 8. daily_stats — 일별 통계
+-- 10. daily_stats — 일별 통계
 -- -----------------------------------------
 CREATE TABLE IF NOT EXISTS daily_stats (
     id                BIGSERIAL PRIMARY KEY,

@@ -17,7 +17,8 @@
 | Cache | Redis |
 | DB | PostgreSQL |
 | ORM | SQLAlchemy |
-| AI | OpenAI GPT-4o |
+| AI | OpenAI GPT-4o (Vision 포함) |
+| 뉴스 | CryptoPanic API + RSS (CoinDesk, Cointelegraph) |
 | 알림 | Telegram Bot API |
 | 자동매매 | Bybit API (pybit) |
 | Container | Docker + Docker Compose |
@@ -32,22 +33,40 @@
 - 새 게시글 감지 시 Kafka 토픽(`post.new`) 발행
 
 ### Analysis — AI 시나리오 분석
-- GPT-4o가 게시글을 단계별 투자 시나리오로 재구성
-- 각 단계별 목표가 / 행동 지침 / 시나리오 무효 조건 추출
-- 분석 결과 PostgreSQL 영구 저장
+- GPT-4o (Vision)가 게시글 텍스트 + 차트 이미지를 함께 분석
+- **유튜버 매수구간** 내에서 피보나치·RSI·거래량 기반 **3분할 매수가** 자동 계산
+- 손절가 미제시 시 구간 하단 −3% 자동 설정, R:R 비율 자동 계산
+- 분석 결과(유튜버 구간·3분할가·기술지표) PostgreSQL 영구 저장
+
+### News Monitor — 실시간 뉴스 분석 *(예정)*
+- **CryptoPanic API** + RSS(CoinDesk, Cointelegraph) 실시간 수집
+- 지정학적 이슈(전쟁·관세·규제·해킹) 등 코인 가격 영향 뉴스 자동 필터
+- GPT-4o가 뉴스를 BULLISH/BEARISH/NEUTRAL + HIGH/MEDIUM/LOW 영향도로 분류
+- HIGH 영향 뉴스는 텔레그램으로 즉시 알림
 
 ### Trading — 자동 매매
-- **Full-auto 모드** (`/work`): 리스크 체크 후 Bybit 자동 주문 + 손절 동시 등록
-- **Semi-auto 모드** (`/manual`): 텔레그램 버튼으로 사용자 확인 후 실행
+- **SEMI_AUTO 모드**: GPT 분석 결과를 텔레그램 버튼으로 확인 후 실행
+- **AUTO 모드**: 리스크 체크 후 Bybit 자동 주문 + 손절 동시 등록
+- **NOTIFY_ONLY 모드**: 매매 없이 알림만 수신
 - 1회 거래 한도 / 일일 손실 한도 / 자동 손절 리스크 제어 내장
 
 ### Telegram Bot — 명령어
-- `/start` — 봇 시작 + 상태 안내
+- `/start` — 봇 시작 + **투자 성향 온보딩** (처음 사용 시 자동 실행)
 - `/status` — 수집 현황 + 오늘 거래 요약
-- `/history` — 최근 5건 분석 이력 조회
-- `/pause` / `/resume` — 수집 일시정지 / 재개
-- `/work` / `/manual` — Full-auto / Semi-auto 모드 전환
-- `/limit` — 리스크 한도 설정 조회
+- `/coins` — 현재 활성 코인 목록 조회
+- `/scenario [코인]` — 최신 분석 시나리오 조회
+- `/mode` — 매매 모드 변경 (AUTO / SEMI_AUTO / MANUAL / NOTIFY_ONLY)
+- `/memo [내용]` — 영상 내용 메모 저장
+- `/memos` — 최근 메모 목록 조회
+
+### 사용자 온보딩 (첫 `/start` 시)
+텔레그램 봇이 순서대로 질문하여 투자 프로필을 구성합니다:
+1. **투자 성향** — 안정형 / 중립형 / 공격형
+2. **총 투자 가능 자산** — 직접 입력 (원 단위)
+3. **레버리지 배수** — 1x ~ 50x
+4. **매매 방식** — 자동 / 반자동 / 수동 / 알림만
+5. **자동매매 비중** — 자동+수동 혼합 시 자동 비중 (%)
+6. **관심 코인** — BTC, ETH, SOL 등 선택
 
 ---
 
@@ -117,15 +136,22 @@ coin-assistant/
 ├── crawler/
 │   └── youtube_crawler.py     # Selenium 1분 폴링 + Kafka 발행
 ├── analysis/
-│   └── gpt_analyzer.py        # GPT-4o 시나리오 분석
+│   └── gpt_analyzer.py        # GPT-4o 시나리오 분석 (3분할·R:R·기술지표)
+├── news/                      # (예정)
+│   └── news_crawler.py        # CryptoPanic + RSS 실시간 뉴스 수집
 ├── trading/
 │   ├── bybit_client.py        # Bybit API 주문 실행
 │   └── risk_manager.py        # 리스크 제어 (한도 / 손절)
 ├── notification/
-│   └── telegram_bot.py        # 텔레그램 봇 명령어 + 알림
+│   └── telegram_bot.py        # 텔레그램 봇 + 사용자 온보딩
 ├── db/
 │   ├── models.py              # SQLAlchemy 모델
-│   └── init.sql               # DB 스키마 초기화
+│   └── database.py            # async 엔진 + 세션 팩토리
+├── migrations/
+│   ├── v2_schema.sql          # v2: 이미지·링크·가격알림
+│   ├── v3_analyzer_schema.sql # v3: 3분할·유튜버 구간·기술지표
+│   └── v4_news_userprofile.sql # v4: 뉴스·사용자 프로필
+├── init.sql                   # DB 전체 스키마 (최신)
 ├── api/
 │   └── main.py                # FastAPI 엔드포인트
 ├── .env.example
