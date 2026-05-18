@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import enum
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional, Any
@@ -61,21 +60,34 @@ class Analysis(Base):
         Index("idx_analyses_created_at", "created_at"),
     )
 
-    id               : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    post_id          : Mapped[int]               = mapped_column(BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
-    signal_type      : Mapped[str]               = mapped_column(String(10), nullable=False)
-    coin_symbol      : Mapped[Optional[str]]     = mapped_column(String(20), nullable=True)
-    entry_price_1    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
-    entry_price_2    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
-    stop_loss_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
-    take_profit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
-    scenario_json    : Mapped[Any]               = mapped_column(JSONB, nullable=False)
-    summary          : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    invalidation     : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    raw_response     : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    is_active        : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
-    expires_at       : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
-    created_at       : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+    id                 : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    post_id            : Mapped[int]               = mapped_column(BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
+    signal_type        : Mapped[str]               = mapped_column(String(10), nullable=False)
+    coin_symbol        : Mapped[Optional[str]]     = mapped_column(String(20), nullable=True)
+    youtuber_zone_low  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    youtuber_zone_high : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    entry_price_1      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 안정형
+    entry_price_2      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 중립형
+    entry_price_3      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 공격형
+    entry_price_4      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 초공격형
+    entry_ratio_1      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
+    entry_ratio_2      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
+    entry_ratio_3      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
+    absolute_stop      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 마지노선
+    stop_loss_price    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    take_profit_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    risk_reward_ratio  : Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
+    current_rsi        : Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    rsi_signal         : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
+    volume_signal      : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
+    fib_level          : Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3), nullable=True)
+    scenario_json      : Mapped[Any]               = mapped_column(JSONB, nullable=False)
+    summary            : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    invalidation       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    raw_response       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    is_active          : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
+    expires_at         : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
+    created_at         : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
     post         : Mapped[Post]             = relationship("Post", back_populates="analyses")
     trades       : Mapped[list[Trade]]      = relationship("Trade", back_populates="analysis")
@@ -85,7 +97,7 @@ class Analysis(Base):
 class PriceAlert(Base):
     __tablename__ = "price_alerts"
     __table_args__ = (
-        CheckConstraint("alert_type IN ('ENTRY_1', 'ENTRY_2', 'STOP_LOSS', 'TAKE_PROFIT')", name="price_alerts_type_check"),
+        CheckConstraint("alert_type IN ('ENTRY_1', 'ENTRY_2', 'ENTRY_3', 'STOP_LOSS', 'TAKE_PROFIT')", name="price_alerts_type_check"),
         CheckConstraint("status IN ('PENDING', 'TRIGGERED', 'CANCELLED')", name="price_alerts_status_check"),
         Index("idx_price_alerts_analysis_id", "analysis_id"),
         Index("idx_price_alerts_coin_symbol", "coin_symbol"),
@@ -133,6 +145,55 @@ class VideoMemo(Base):
     created_at: Mapped[datetime]     = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
     post: Mapped[Optional[Post]] = relationship("Post", back_populates="video_memos")
+
+
+class NewsArticle(Base):
+    __tablename__ = "news_articles"
+    __table_args__ = (
+        CheckConstraint("sentiment IN ('BULLISH', 'BEARISH', 'NEUTRAL')", name="news_sentiment_check"),
+        CheckConstraint("impact_level IN ('HIGH', 'MEDIUM', 'LOW')", name="news_impact_check"),
+        Index("idx_news_published_at", "published_at"),
+        Index("idx_news_source", "source"),
+        Index("idx_news_impact", "impact_level"),
+    )
+
+    id            : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source        : Mapped[str]               = mapped_column(String(50), nullable=False)
+    external_id   : Mapped[Optional[str]]     = mapped_column(String(255), nullable=True, unique=True)
+    title         : Mapped[str]               = mapped_column(Text, nullable=False)
+    summary       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    url           : Mapped[str]               = mapped_column(Text, nullable=False)
+    published_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False)
+    sentiment     : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
+    impact_level  : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
+    related_coins : Mapped[Any]               = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
+    gpt_analysis  : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    is_processed  : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
+    collected_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+    __table_args__ = (
+        CheckConstraint("risk_tolerance IN ('CONSERVATIVE', 'MODERATE', 'AGGRESSIVE')", name="user_risk_check"),
+        CheckConstraint("trading_mode IN ('AUTO', 'SEMI_AUTO', 'MANUAL', 'NOTIFY_ONLY')", name="user_mode_check"),
+        CheckConstraint("leverage BETWEEN 1 AND 50", name="user_leverage_check"),
+        CheckConstraint("auto_ratio BETWEEN 0 AND 100", name="user_auto_ratio_check"),
+        Index("idx_user_profiles_telegram_id", "telegram_user_id"),
+    )
+
+    id                   : Mapped[int]          = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    telegram_user_id     : Mapped[int]          = mapped_column(BigInteger, nullable=False, unique=True)
+    telegram_username    : Mapped[Optional[str]]= mapped_column(String(100), nullable=True)
+    risk_tolerance       : Mapped[str]          = mapped_column(String(20), nullable=False, server_default=text("'MODERATE'"))
+    total_asset_krw      : Mapped[Optional[int]]= mapped_column(BigInteger, nullable=True)
+    leverage             : Mapped[int]          = mapped_column(Integer, nullable=False, server_default=text("1"))
+    trading_mode         : Mapped[str]          = mapped_column(String(20), nullable=False, server_default=text("'SEMI_AUTO'"))
+    auto_ratio           : Mapped[int]          = mapped_column(Integer, nullable=False, server_default=text("50"))
+    preferred_coins      : Mapped[Any]          = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
+    onboarding_completed : Mapped[bool]         = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
+    created_at           : Mapped[datetime]     = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+    updated_at           : Mapped[datetime]     = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
 
 class Trade(Base):

@@ -27,16 +27,29 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # GPT-4o에게 줄 역할과 응답 형식 지시
 SYSTEM_PROMPT = """\
-당신은 국내 주식·코인 투자 분석 어시스턴트입니다.
-유튜브 멤버십 투자 게시글(텍스트 + 이미지)을 읽고 반드시 아래 JSON 형식만 반환하세요. 설명 텍스트 없이 JSON만.
+당신은 국내 코인 투자 분석 어시스턴트입니다.
+유튜브 멤버십 투자 게시글(텍스트 + 이미지 차트)을 분석하여 반드시 아래 JSON 형식만 반환하세요. 설명 텍스트 없이 JSON만.
 
 {
   "signal_type": "BUY" | "SELL" | "HOLD",
   "coin_symbol": "BTC" | "ETH" | "SOL" | "XRP" | 기타심볼 | null,
-  "entry_price_1": 1차 매수 목표가 (숫자) | null,
-  "entry_price_2": 2차 매수 목표가 (숫자) | null,
+  "youtuber_zone_low": 유튜버가 제시한 매수구간 하단 (숫자) | null,
+  "youtuber_zone_high": 유튜버가 제시한 매수구간 상단 (숫자) | null,
+  "entry_price_1": 안정형 진입가 — 구간 최상단 (숫자) | null,
+  "entry_price_2": 중립형 진입가 — 구간 중간 (숫자) | null,
+  "entry_price_3": 공격형 진입가 — 구간 하단 (숫자) | null,
+  "entry_price_4": 초공격형 진입가 — 마지막 매수 / 최저점 (숫자) | null,
+  "entry_ratio_1": null,
+  "entry_ratio_2": null,
+  "entry_ratio_3": null,
+  "absolute_stop": 마지노선 — 이 아래면 시즌 종료 수준 (숫자) | null,
   "stop_loss_price": 손절가 (숫자) | null,
   "take_profit_price": 목표 익절가 (숫자) | null,
+  "risk_reward_ratio": R:R 비율 (소수, 예: 2.5) | null,
+  "current_rsi": 게시글에 언급된 RSI 현재값 (숫자, 예: 43.37) | null,
+  "rsi_signal": "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT" | null,
+  "volume_signal": "HIGH" | "NORMAL" | "LOW" | null,
+  "fib_level": 가장 가까운 피보나치 레벨 (예: 0.618) | null,
   "summary": "핵심 투자 내용 2~3문장 요약",
   "invalidation": "이 분석이 무효화되는 조건",
   "scenario": [
@@ -44,12 +57,51 @@ SYSTEM_PROMPT = """\
   ]
 }
 
-- signal_type: 게시글의 핵심 방향 (BUY=매수/강세, SELL=매도/약세, HOLD=관망/중립)
-- coin_symbol: 언급된 코인/주식 심볼. 이미지의 차트에서도 확인할 것. 없으면 null
-- entry_price_1/2: 1차·2차 매수 구간 또는 목표가. 이미지에 표시된 수치 우선. 없으면 null
-- stop_loss_price: 손절 기준가. 없으면 null
-- take_profit_price: 익절 목표가. 없으면 null
-- scenario: 단계별 시나리오 최대 3단계, target_price는 언급 없으면 null
+## 분석 원칙
+
+### 1. 유튜버 신호 우선
+- 유튜버가 제시한 가격들을 정확히 추출하세요. 텍스트에 명시된 숫자를 최우선으로 사용.
+- 이미지 차트에 표시된 수치가 있으면 텍스트와 함께 참고.
+- signal_type은 유튜버의 방향성(BUY/SELL/HOLD)을 따릅니다.
+
+### 2. 성향별 단일 진입가 배정 (BUY 신호일 때)
+각 진입가는 투자 성향별로 하나씩 배정됩니다. 각 성향의 사람은 자신의 레벨 하나에서만 매수합니다.
+
+- **entry_price_1 (안정형)**: 유튜버가 제시한 레벨 중 가장 높은 가격.
+  → 일찍 진입, 리스크 최소. 가격이 안 내려와도 진입 가능.
+- **entry_price_2 (중립형)**: 유튜버가 제시한 레벨 중 중간 가격.
+  → 적당한 하락 후 진입.
+- **entry_price_3 (공격형)**: 유튜버가 제시한 레벨 중 하단 가격.
+  → 깊은 하락 기다림. 진입 못 할 수도 있지만 수익 극대화.
+- **entry_price_4 (초공격형/마지막 매수)**: 유튜버가 "마지막 매수" 또는 최저 레벨로 명시한 가격.
+  → 유튜버가 명시하지 않으면 null.
+
+레벨이 4개보다 적으면 있는 것만 채우고 나머지는 null.
+레벨이 1개뿐이면 entry_price_1에만 채우고 나머지 null.
+
+### 3. 마지노선 (absolute_stop) 추출
+- 유튜버가 "시즌 종료", "추세선 붕괴", "절대 지지선" 등으로 표현한 가격.
+- stop_loss_price와 다름: 여기 도달하면 단순 손절이 아니라 시장 방향 자체가 바뀐 것.
+- 없으면 null.
+
+### 4. 손절가 자동 계산
+- 유튜버가 명시한 손절가 있으면 그대로 사용.
+- 없으면: stop_loss_price = youtuber_zone_low × 0.97 (구간 하단 -3%)
+- SELL 신호면: stop_loss_price = youtuber_zone_high × 1.03 (구간 상단 +3%)
+
+### 5. R:R 비율 계산
+- risk_reward_ratio = (take_profit_price - entry_price_2) / (entry_price_2 - stop_loss_price)
+- entry_price_2 기준 (중립형 기준값). 계산 불가능하면 null.
+
+### 6. 기술적 지표
+- current_rsi: 유튜버가 텍스트에서 언급한 RSI 수치 (예: "rsi 43.37" → 43.37).
+- rsi_signal: current_rsi 기준 30 이하 → OVERSOLD, 70 이상 → OVERBOUGHT, 나머지 → NEUTRAL.
+- 거래량: 최근 캔들 거래량이 평균 대비 높으면 HIGH, 낮으면 LOW. 판단 불가 → null.
+- 피보나치: 차트의 주요 되돌림 레벨 중 entry_price_2와 가장 가까운 값.
+
+### 7. 무효화 조건
+- BUY 신호: "종가 기준 {zone_low 또는 absolute_stop} 하향 이탈" 형식으로 반드시 포함.
+- SELL 신호: "종가 기준 {zone_high} 상향 돌파" 형식으로 반드시 포함.
 """
 
 
@@ -97,10 +149,23 @@ def _save_analysis_sync(
     post_db_id: int,
     signal_type: str,
     coin_symbol: str | None,
+    youtuber_zone_low: float | None,
+    youtuber_zone_high: float | None,
     entry_price_1: float | None,
     entry_price_2: float | None,
+    entry_price_3: float | None,
+    entry_price_4: float | None,
+    entry_ratio_1: int | None,
+    entry_ratio_2: int | None,
+    entry_ratio_3: int | None,
+    absolute_stop: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
+    risk_reward_ratio: float | None,
+    current_rsi: float | None,
+    rsi_signal: str | None,
+    volume_signal: str | None,
+    fib_level: float | None,
     summary: str,
     invalidation: str,
     scenario_json: list,
@@ -114,22 +179,32 @@ def _save_analysis_sync(
                 """
                 INSERT INTO analyses (
                     post_id, signal_type, coin_symbol,
-                    entry_price_1, entry_price_2, stop_loss_price, take_profit_price,
+                    youtuber_zone_low, youtuber_zone_high,
+                    entry_price_1, entry_price_2, entry_price_3, entry_price_4,
+                    entry_ratio_1, entry_ratio_2, entry_ratio_3,
+                    absolute_stop, stop_loss_price, take_profit_price,
+                    risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
                     summary, invalidation, scenario_json, raw_response
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                VALUES (
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s::jsonb, %s
+                )
                 RETURNING id
                 """,
                 (
-                    post_db_id,
-                    signal_type,
-                    coin_symbol,
-                    entry_price_1,
-                    entry_price_2,
-                    stop_loss_price,
-                    take_profit_price,
-                    summary,
-                    invalidation,
+                    post_db_id, signal_type, coin_symbol,
+                    youtuber_zone_low, youtuber_zone_high,
+                    entry_price_1, entry_price_2, entry_price_3, entry_price_4,
+                    entry_ratio_1, entry_ratio_2, entry_ratio_3,
+                    absolute_stop, stop_loss_price, take_profit_price,
+                    risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
+                    summary, invalidation,
                     json.dumps(scenario_json, ensure_ascii=False),
                     raw_response,
                 ),
@@ -146,6 +221,7 @@ def _create_price_alerts_sync(
     coin_symbol: str,
     entry_price_1: float | None,
     entry_price_2: float | None,
+    entry_price_3: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
 ) -> None:
@@ -158,6 +234,8 @@ def _create_price_alerts_sync(
         alerts.append(("ENTRY_1",     entry_price_1))
     if entry_price_2:
         alerts.append(("ENTRY_2",     entry_price_2))
+    if entry_price_3:
+        alerts.append(("ENTRY_3",     entry_price_3))
     if stop_loss_price:
         alerts.append(("STOP_LOSS",   stop_loss_price))
     if take_profit_price:
@@ -220,16 +298,29 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
     raw = response.choices[0].message.content
     parsed = json.loads(raw)
     return {
-        "signal_type":      parsed.get("signal_type", "HOLD").upper(),
-        "coin_symbol":      parsed.get("coin_symbol"),
-        "entry_price_1":    parsed.get("entry_price_1"),
-        "entry_price_2":    parsed.get("entry_price_2"),
-        "stop_loss_price":  parsed.get("stop_loss_price"),
-        "take_profit_price":parsed.get("take_profit_price"),
-        "summary":          parsed.get("summary", ""),
-        "invalidation":     parsed.get("invalidation", ""),
-        "scenario":         parsed.get("scenario", []),
-        "raw":              raw,
+        "signal_type":        parsed.get("signal_type", "HOLD").upper(),
+        "coin_symbol":        parsed.get("coin_symbol"),
+        "youtuber_zone_low":  parsed.get("youtuber_zone_low"),
+        "youtuber_zone_high": parsed.get("youtuber_zone_high"),
+        "entry_price_1":      parsed.get("entry_price_1"),   # 안정형
+        "entry_price_2":      parsed.get("entry_price_2"),   # 중립형
+        "entry_price_3":      parsed.get("entry_price_3"),   # 공격형
+        "entry_price_4":      parsed.get("entry_price_4"),   # 초공격형 / 마지막 매수
+        "entry_ratio_1":      parsed.get("entry_ratio_1"),
+        "entry_ratio_2":      parsed.get("entry_ratio_2"),
+        "entry_ratio_3":      parsed.get("entry_ratio_3"),
+        "absolute_stop":      parsed.get("absolute_stop"),   # 마지노선 (시즌 종료 레벨)
+        "stop_loss_price":    parsed.get("stop_loss_price"),
+        "take_profit_price":  parsed.get("take_profit_price"),
+        "risk_reward_ratio":  parsed.get("risk_reward_ratio"),
+        "current_rsi":        parsed.get("current_rsi"),
+        "rsi_signal":         parsed.get("rsi_signal"),
+        "volume_signal":      parsed.get("volume_signal"),
+        "fib_level":          parsed.get("fib_level"),
+        "summary":            parsed.get("summary", ""),
+        "invalidation":       parsed.get("invalidation", ""),
+        "scenario":           parsed.get("scenario", []),
+        "raw":                raw,
     }
 
 
@@ -237,8 +328,7 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
 
 async def _send_telegram(
     analysis_id: int,
-    signal_type: str,
-    summary: str,
+    result: dict,
     content_preview: str,
 ) -> None:
     """분석 결과를 Telegram으로 알린다."""
@@ -247,15 +337,75 @@ async def _send_telegram(
 
     import httpx
 
+    signal_type = result["signal_type"]
     EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}
     emoji = EMOJI.get(signal_type, "⚪")
 
-    text = (
-        f"{emoji} *새 투자 신호 — {signal_type}*\n\n"
-        f"*요약*\n{summary}\n\n"
-        f"*원문 미리보기*\n{content_preview[:120]}\n\n"
-        f"분석 ID: \\#{analysis_id}"
-    )
+    coin      = result.get("coin_symbol") or "?"
+    zone_low  = result.get("youtuber_zone_low")
+    zone_high = result.get("youtuber_zone_high")
+    e1 = result.get("entry_price_1")   # 안정형
+    e2 = result.get("entry_price_2")   # 중립형
+    e3 = result.get("entry_price_3")   # 공격형
+    e4 = result.get("entry_price_4")   # 초공격형
+    abs_stop = result.get("absolute_stop")
+    sl  = result.get("stop_loss_price")
+    tp  = result.get("take_profit_price")
+    rr  = result.get("risk_reward_ratio")
+    cur_rsi = result.get("current_rsi")
+    rsi = result.get("rsi_signal")
+    vol = result.get("volume_signal")
+    fib = result.get("fib_level")
+
+    def _fmt(v):
+        if v is None:
+            return "-"
+        return f"{v:,.0f}" if v >= 1000 else f"{v:,.4f}"
+
+    lines = [f"{emoji} *새 투자 신호 — {signal_type} ({coin})*\n"]
+
+    if zone_low and zone_high:
+        lines.append(f"📌 유튜버 구간: {_fmt(zone_low)} ~ {_fmt(zone_high)}\n")
+
+    # 성향별 진입가 표
+    entry_rows = [
+        ("안정형", e1), ("중립형", e2), ("공격형", e3), ("초공격형", e4),
+    ]
+    active = [(label, price) for label, price in entry_rows if price]
+    if active:
+        entry_lines = ["🎯 *성향별 진입가*"]
+        for label, price in active:
+            entry_lines.append(f"  {label}: {_fmt(price)}")
+        lines.append("\n".join(entry_lines) + "\n")
+
+    if sl or tp:
+        lines.append(
+            f"🛡 손절: {_fmt(sl)}  |  🏆 목표: {_fmt(tp)}"
+            + (f"  (R:R {rr:.1f})" if rr else "")
+            + "\n"
+        )
+
+    if abs_stop:
+        lines.append(f"⛔ 마지노선: {_fmt(abs_stop)} (이탈 시 시즌 종료)\n")
+
+    tech_parts = []
+    if cur_rsi:
+        tech_parts.append(f"RSI {cur_rsi} ({rsi or '?'})")
+    elif rsi:
+        tech_parts.append(f"RSI={rsi}")
+    if vol:
+        tech_parts.append(f"거래량={vol}")
+    if fib:
+        tech_parts.append(f"Fib {fib}")
+    if tech_parts:
+        lines.append("📊 기술지표: " + " | ".join(tech_parts) + "\n")
+
+    lines.append(f"\n*요약*\n{result['summary']}\n")
+    lines.append(f"*무효 조건*\n{result['invalidation']}\n")
+    lines.append(f"\n원문: {content_preview[:80]}...")
+    lines.append(f"\n분석 ID: \\#{analysis_id}")
+
+    text = "\n".join(lines)
 
     async with httpx.AsyncClient() as client:
         try:
@@ -303,10 +453,23 @@ async def _process(msg_value: bytes) -> None:
         post_db_id,
         result["signal_type"],
         result["coin_symbol"],
+        result["youtuber_zone_low"],
+        result["youtuber_zone_high"],
         result["entry_price_1"],
         result["entry_price_2"],
+        result["entry_price_3"],
+        result["entry_price_4"],
+        result["entry_ratio_1"],
+        result["entry_ratio_2"],
+        result["entry_ratio_3"],
+        result["absolute_stop"],
         result["stop_loss_price"],
         result["take_profit_price"],
+        result["risk_reward_ratio"],
+        result["current_rsi"],
+        result["rsi_signal"],
+        result["volume_signal"],
+        result["fib_level"],
         result["summary"],
         result["invalidation"],
         result["scenario"],
@@ -323,18 +486,14 @@ async def _process(msg_value: bytes) -> None:
             result["coin_symbol"],
             result["entry_price_1"],
             result["entry_price_2"],
+            result["entry_price_3"],
             result["stop_loss_price"],
             result["take_profit_price"],
         )
         await loop.run_in_executor(None, alerts_fn)
 
     # Telegram 알림
-    await _send_telegram(
-        analysis_id,
-        result["signal_type"],
-        result["summary"],
-        post["content"],
-    )
+    await _send_telegram(analysis_id, result, post["content"])
 
 
 # ── 실행 루프 ─────────────────────────────────────────────────
