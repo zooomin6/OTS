@@ -414,7 +414,15 @@ async def _send_telegram(
             return "-"
         return f"{v:,.0f}" if v >= 1000 else f"{v:,.4f}"
 
+    timeframe        = result.get("timeframe")
+    is_reference_only = result.get("is_reference_only", False)
+    tf_label = {"MONTHLY": "월봉", "WEEKLY": "주봉", "DAILY": "일봉", "HOURLY": "시간봉"}.get(timeframe or "", "")
+
     lines = [f"{emoji} *새 투자 신호 — {signal_type} ({coin})*\n"]
+
+    if tf_label:
+        ref = " _(참고용 — 자동매매 없음)_" if is_reference_only else ""
+        lines.append(f"📅 차트: {tf_label}{ref}\n")
 
     if zone_low and zone_high:
         lines.append(f"📌 유튜버 구간: {_fmt(zone_low)} ~ {_fmt(zone_high)}\n")
