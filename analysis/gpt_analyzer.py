@@ -33,18 +33,22 @@ SYSTEM_PROMPT = """\
 {
   "signal_type": "BUY" | "SELL" | "HOLD",
   "coin_symbol": "BTC" | "ETH" | "SOL" | "XRP" | 기타심볼 | null,
-  "youtuber_zone_low": 유튜버가 제시한 매수구간 하단 (숫자) | null,
-  "youtuber_zone_high": 유튜버가 제시한 매수구간 상단 (숫자) | null,
-  "entry_price_1": 안정형 진입가 — 구간 최상단 (숫자) | null,
-  "entry_price_2": 중립형 진입가 — 구간 중간 (숫자) | null,
-  "entry_price_3": 공격형 진입가 — 구간 하단 (숫자) | null,
-  "entry_price_4": 초공격형 진입가 — 마지막 매수 / 최저점 (숫자) | null,
+  "timeframe": "MONTHLY" | "WEEKLY" | "DAILY" | "HOURLY" | null,
+  "youtuber_zone_low": 유튜버가 제시한 매수/매도구간 하단 (숫자) | null,
+  "youtuber_zone_high": 유튜버가 제시한 매수/매도구간 상단 (숫자) | null,
+  "entry_price_1": 안정형 진입가 (숫자) | null,
+  "entry_price_2": 중립형 진입가 (숫자) | null,
+  "entry_price_3": 공격형 진입가 (숫자) | null,
+  "entry_price_4": 초공격형 진입가 — 마지막 매수/매도 (숫자) | null,
   "entry_ratio_1": null,
   "entry_ratio_2": null,
   "entry_ratio_3": null,
   "absolute_stop": 마지노선 — 이 아래면 시즌 종료 수준 (숫자) | null,
   "stop_loss_price": 손절가 (숫자) | null,
-  "take_profit_price": 목표 익절가 (숫자) | null,
+  "take_profit_price": 1차 목표 익절가 (숫자) | null,
+  "take_profit_price_2": 2차 목표 익절가 (숫자) | null,
+  "short_entry_price": SELL 신호 시 숏 진입 추천가 (숫자) | null,
+  "short_stop_loss": SELL 신호 시 숏 손절가 (숫자) | null,
   "risk_reward_ratio": R:R 비율 (소수, 예: 2.5) | null,
   "current_rsi": 게시글에 언급된 RSI 현재값 (숫자, 예: 43.37) | null,
   "rsi_signal": "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT" | null,
@@ -64,42 +68,56 @@ SYSTEM_PROMPT = """\
 - 이미지 차트에 표시된 수치가 있으면 텍스트와 함께 참고.
 - signal_type은 유튜버의 방향성(BUY/SELL/HOLD)을 따릅니다.
 
-### 2. 성향별 단일 진입가 배정 (BUY 신호일 때)
-각 진입가는 투자 성향별로 하나씩 배정됩니다. 각 성향의 사람은 자신의 레벨 하나에서만 매수합니다.
+### 2. 차트 시간 단위 (timeframe) 추출
+- 게시글/차트에서 "월봉", "주봉", "일봉", "시봉/시간봉/1H/4H" 키워드를 찾아 판단.
+- MONTHLY(월봉), WEEKLY(주봉): 참고용 분석 — 자동매매 주문 없음.
+- DAILY(일봉), HOURLY(시간봉): 자동매매 실행 대상.
+- 명확히 알 수 없으면 null.
 
-- **entry_price_1 (안정형)**: 유튜버가 제시한 레벨 중 가장 높은 가격.
-  → 일찍 진입, 리스크 최소. 가격이 안 내려와도 진입 가능.
-- **entry_price_2 (중립형)**: 유튜버가 제시한 레벨 중 중간 가격.
-  → 적당한 하락 후 진입.
-- **entry_price_3 (공격형)**: 유튜버가 제시한 레벨 중 하단 가격.
-  → 깊은 하락 기다림. 진입 못 할 수도 있지만 수익 극대화.
-- **entry_price_4 (초공격형/마지막 매수)**: 유튜버가 "마지막 매수" 또는 최저 레벨로 명시한 가격.
-  → 유튜버가 명시하지 않으면 null.
+### 3. 성향별 단일 진입가 배정
+
+**BUY 신호일 때** — 각 성향의 사람은 자신의 레벨 하나에서만 매수합니다:
+- **entry_price_1 (안정형)**: 유튜버 레벨 중 가장 높은 가격. 일찍 진입, 리스크 최소.
+- **entry_price_2 (중립형)**: 유튜버 레벨 중 중간 가격.
+- **entry_price_3 (공격형)**: 유튜버 레벨 중 하단 가격. 깊은 하락 기다림.
+- **entry_price_4 (초공격형)**: 유튜버가 "마지막 매수" 또는 최저 레벨로 명시한 가격. 명시 없으면 null.
+
+**SELL 신호일 때** — 방향이 반전됩니다 (숏은 높은 가격이 더 안전):
+- **entry_price_1 (안정형)**: 유튜버 레벨 중 가장 낮은 가격. 충분히 내린 후 숏.
+- **entry_price_2 (중립형)**: 유튜버 레벨 중 중간 가격.
+- **entry_price_3 (공격형)**: 유튜버 레벨 중 가장 높은 가격. 일찍 숏 진입.
+- **entry_price_4 (초공격형)**: 유튜버가 "가장 공격적 숏 자리"로 명시한 가격. 명시 없으면 null.
 
 레벨이 4개보다 적으면 있는 것만 채우고 나머지는 null.
 레벨이 1개뿐이면 entry_price_1에만 채우고 나머지 null.
 
-### 3. 마지노선 (absolute_stop) 추출
+### 4. 숏 진입가 (SELL 신호 전용)
+- GPT가 숏 포지션 진입이 적절하다고 판단할 때만 short_entry_price를 채웁니다.
+- 단순 롱 청산 알림에 그칠 경우 short_entry_price = null.
+- short_stop_loss = short_entry_price × 1.03 (숏 손절은 진입가 위 +3%).
+- 유튜버가 명시한 값 있으면 그 값 우선.
+
+### 5. 마지노선 (absolute_stop) 추출
 - 유튜버가 "시즌 종료", "추세선 붕괴", "절대 지지선" 등으로 표현한 가격.
 - stop_loss_price와 다름: 여기 도달하면 단순 손절이 아니라 시장 방향 자체가 바뀐 것.
 - 없으면 null.
 
-### 4. 손절가 자동 계산
+### 6. 손절가 자동 계산
 - 유튜버가 명시한 손절가 있으면 그대로 사용.
-- 없으면: stop_loss_price = youtuber_zone_low × 0.97 (구간 하단 -3%)
-- SELL 신호면: stop_loss_price = youtuber_zone_high × 1.03 (구간 상단 +3%)
+- BUY 신호 — 없으면: stop_loss_price = youtuber_zone_low × 0.97 (구간 하단 -3%)
+- SELL 신호 — 없으면: stop_loss_price = youtuber_zone_high × 1.03 (구간 상단 +3%)
 
-### 5. R:R 비율 계산
+### 7. R:R 비율 계산
 - risk_reward_ratio = (take_profit_price - entry_price_2) / (entry_price_2 - stop_loss_price)
 - entry_price_2 기준 (중립형 기준값). 계산 불가능하면 null.
 
-### 6. 기술적 지표
+### 8. 기술적 지표
 - current_rsi: 유튜버가 텍스트에서 언급한 RSI 수치 (예: "rsi 43.37" → 43.37).
 - rsi_signal: current_rsi 기준 30 이하 → OVERSOLD, 70 이상 → OVERBOUGHT, 나머지 → NEUTRAL.
 - 거래량: 최근 캔들 거래량이 평균 대비 높으면 HIGH, 낮으면 LOW. 판단 불가 → null.
 - 피보나치: 차트의 주요 되돌림 레벨 중 entry_price_2와 가장 가까운 값.
 
-### 7. 무효화 조건
+### 9. 무효화 조건
 - BUY 신호: "종가 기준 {zone_low 또는 absolute_stop} 하향 이탈" 형식으로 반드시 포함.
 - SELL 신호: "종가 기준 {zone_high} 상향 돌파" 형식으로 반드시 포함.
 """
@@ -145,10 +163,21 @@ def _fetch_post_sync(post_db_id: int) -> dict | None:
         conn.close()
 
 
+def _calc_expires_at(timeframe: str | None) -> str | None:
+    """timeframe 기반으로 expires_at 문자열을 계산한다 (DB NOW() 기준 상대값)."""
+    if timeframe == "DAILY":
+        return "NOW() + INTERVAL '5 days'"
+    if timeframe == "HOURLY":
+        return "NOW() + INTERVAL '24 hours'"
+    return None  # MONTHLY / WEEKLY / None → 만료 없음
+
+
 def _save_analysis_sync(
     post_db_id: int,
     signal_type: str,
     coin_symbol: str | None,
+    timeframe: str | None,
+    is_reference_only: bool,
     youtuber_zone_low: float | None,
     youtuber_zone_high: float | None,
     entry_price_1: float | None,
@@ -161,6 +190,8 @@ def _save_analysis_sync(
     absolute_stop: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
+    short_entry_price: float | None,
+    short_stop_loss: float | None,
     risk_reward_ratio: float | None,
     current_rsi: float | None,
     rsi_signal: str | None,
@@ -172,37 +203,47 @@ def _save_analysis_sync(
     raw_response: str,
 ) -> int:
     """analyses 테이블에 저장하고 새 analysis id를 반환한다."""
+    expires_expr = _calc_expires_at(timeframe)
+
     conn = _db_connect()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 INSERT INTO analyses (
                     post_id, signal_type, coin_symbol,
+                    timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
                     entry_ratio_1, entry_ratio_2, entry_ratio_3,
                     absolute_stop, stop_loss_price, take_profit_price,
+                    short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
-                    summary, invalidation, scenario_json, raw_response
+                    summary, invalidation, scenario_json, raw_response,
+                    expires_at
                 )
                 VALUES (
                     %s, %s, %s,
                     %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s::jsonb, %s
+                    %s, %s, %s::jsonb, %s,
+                    {expires_expr if expires_expr else 'NULL'}
                 )
                 RETURNING id
                 """,
                 (
                     post_db_id, signal_type, coin_symbol,
+                    timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
                     entry_ratio_1, entry_ratio_2, entry_ratio_3,
                     absolute_stop, stop_loss_price, take_profit_price,
+                    short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
                     summary, invalidation,
                     json.dumps(scenario_json, ensure_ascii=False),
@@ -297,21 +338,32 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
     )
     raw = response.choices[0].message.content
     parsed = json.loads(raw)
+    timeframe = parsed.get("timeframe")
+    if timeframe:
+        timeframe = timeframe.upper()
+        if timeframe not in ("MONTHLY", "WEEKLY", "DAILY", "HOURLY"):
+            timeframe = None
+
     return {
         "signal_type":        parsed.get("signal_type", "HOLD").upper(),
         "coin_symbol":        parsed.get("coin_symbol"),
+        "timeframe":          timeframe,
+        "is_reference_only":  timeframe in ("MONTHLY", "WEEKLY"),
         "youtuber_zone_low":  parsed.get("youtuber_zone_low"),
         "youtuber_zone_high": parsed.get("youtuber_zone_high"),
-        "entry_price_1":      parsed.get("entry_price_1"),   # 안정형
-        "entry_price_2":      parsed.get("entry_price_2"),   # 중립형
-        "entry_price_3":      parsed.get("entry_price_3"),   # 공격형
-        "entry_price_4":      parsed.get("entry_price_4"),   # 초공격형 / 마지막 매수
+        "entry_price_1":      parsed.get("entry_price_1"),
+        "entry_price_2":      parsed.get("entry_price_2"),
+        "entry_price_3":      parsed.get("entry_price_3"),
+        "entry_price_4":      parsed.get("entry_price_4"),
         "entry_ratio_1":      parsed.get("entry_ratio_1"),
         "entry_ratio_2":      parsed.get("entry_ratio_2"),
         "entry_ratio_3":      parsed.get("entry_ratio_3"),
-        "absolute_stop":      parsed.get("absolute_stop"),   # 마지노선 (시즌 종료 레벨)
+        "absolute_stop":      parsed.get("absolute_stop"),
         "stop_loss_price":    parsed.get("stop_loss_price"),
         "take_profit_price":  parsed.get("take_profit_price"),
+        "take_profit_price_2":parsed.get("take_profit_price_2"),
+        "short_entry_price":  parsed.get("short_entry_price"),
+        "short_stop_loss":    parsed.get("short_stop_loss"),
         "risk_reward_ratio":  parsed.get("risk_reward_ratio"),
         "current_rsi":        parsed.get("current_rsi"),
         "rsi_signal":         parsed.get("rsi_signal"),
@@ -453,6 +505,8 @@ async def _process(msg_value: bytes) -> None:
         post_db_id,
         result["signal_type"],
         result["coin_symbol"],
+        result["timeframe"],
+        result["is_reference_only"],
         result["youtuber_zone_low"],
         result["youtuber_zone_high"],
         result["entry_price_1"],
@@ -465,6 +519,8 @@ async def _process(msg_value: bytes) -> None:
         result["absolute_stop"],
         result["stop_loss_price"],
         result["take_profit_price"],
+        result["short_entry_price"],
+        result["short_stop_loss"],
         result["risk_reward_ratio"],
         result["current_rsi"],
         result["rsi_signal"],
@@ -478,8 +534,8 @@ async def _process(msg_value: bytes) -> None:
     analysis_id = await loop.run_in_executor(None, save_fn)
     print(f"[analyzer] 저장 완료: analysis_id={analysis_id}")
 
-    # 코인과 가격 정보가 있으면 price_alerts 자동 등록
-    if result["coin_symbol"]:
+    # MONTHLY/WEEKLY 참고용 분석은 가격 알림 생성 안 함
+    if result["coin_symbol"] and not result["is_reference_only"]:
         alerts_fn = functools.partial(
             _create_price_alerts_sync,
             analysis_id,

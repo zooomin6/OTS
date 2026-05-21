@@ -34,9 +34,12 @@
 
 ### Analysis — AI 시나리오 분석
 - GPT-4o (Vision)가 게시글 텍스트 + 차트 이미지를 함께 분석
-- **유튜버 매수구간** 내에서 피보나치·RSI·거래량 기반 **3분할 매수가** 자동 계산
+- **차트 시간 단위(timeframe) 자동 감지** — 월봉/주봉은 참고 알림만, 일봉/시간봉은 자동매매 실행
+- **투자 성향별 단일 진입가** 자동 배정 — 안정형(최상단) / 중립형 / 공격형 / 초공격형(최하단)
 - 손절가 미제시 시 구간 하단 −3% 자동 설정, R:R 비율 자동 계산
-- 분석 결과(유튜버 구간·3분할가·기술지표) PostgreSQL 영구 저장
+- **SELL 신호**: 롱 청산 알림 + GPT 판단 시 숏 진입가/손절가 자동 제안
+- 분석 결과(유튜버 구간·성향별 진입가·기술지표) PostgreSQL 영구 저장
+- 일봉 분석은 5일, 시간봉 분석은 24시간 후 자동 만료
 
 ### News Monitor — 실시간 뉴스 분석 *(예정)*
 - **CryptoPanic API** + RSS(CoinDesk, Cointelegraph) 실시간 수집
@@ -118,7 +121,7 @@ KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 ### 3. DB 초기화
 
 ```bash
-psql -U {유저명} -d coin_assistant -f db/init.sql
+psql -U {유저명} -d coin_assistant -f init.sql
 ```
 
 ### 4. 빌드 및 실행
@@ -148,9 +151,10 @@ coin-assistant/
 │   ├── models.py              # SQLAlchemy 모델
 │   └── database.py            # async 엔진 + 세션 팩토리
 ├── migrations/
-│   ├── v2_schema.sql          # v2: 이미지·링크·가격알림
-│   ├── v3_analyzer_schema.sql # v3: 3분할·유튜버 구간·기술지표
-│   └── v4_news_userprofile.sql # v4: 뉴스·사용자 프로필
+│   ├── v2_schema.sql           # v2: 이미지·링크·가격알림
+│   ├── v3_analyzer_schema.sql  # v3: 성향별 진입가·유튜버 구간·기술지표
+│   ├── v4_news_userprofile.sql # v4: 뉴스·사용자 프로필
+│   └── v5_trading_schema.sql   # v5: positions·경제지표·timeframe·숏 진입
 ├── init.sql                   # DB 전체 스키마 (최신)
 ├── api/
 │   └── main.py                # FastAPI 엔드포인트
