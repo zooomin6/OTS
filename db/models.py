@@ -14,8 +14,10 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
+    Time,
     UniqueConstraint,
     text,
 )
@@ -36,14 +38,15 @@ class Post(Base):
         Index("idx_posts_post_type", "post_type"),
     )
 
-    id          : Mapped[int]      = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    channel_id  : Mapped[str]      = mapped_column(String(100), nullable=False)
-    post_id     : Mapped[str]      = mapped_column(String(255), nullable=False, unique=True)
-    content     : Mapped[str]      = mapped_column(Text, nullable=False)
-    post_type   : Mapped[str]      = mapped_column(String(10), nullable=False, server_default=text("'text'"))
-    image_urls  : Mapped[Any]      = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
-    published_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+    id           : Mapped[int]           = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    channel_id   : Mapped[str]           = mapped_column(String(100), nullable=False)
+    post_id      : Mapped[str]           = mapped_column(String(255), nullable=False, unique=True)
+    content      : Mapped[str]           = mapped_column(Text, nullable=False)
+    post_type    : Mapped[str]           = mapped_column(String(10), nullable=False, server_default=text("'text'"))
+    image_urls   : Mapped[Any]           = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
+    content_hash : Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    published_at : Mapped[datetime]      = mapped_column(DateTime, nullable=False)
+    collected_at : Mapped[datetime]      = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
     analyses   : Mapped[list[Analysis]]   = relationship("Analysis", back_populates="post", cascade="all, delete-orphan")
     links      : Mapped[list[PostLink]]   = relationship("PostLink", back_populates="post", cascade="all, delete-orphan")
@@ -64,6 +67,8 @@ class Analysis(Base):
     post_id            : Mapped[int]               = mapped_column(BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
     signal_type        : Mapped[str]               = mapped_column(String(10), nullable=False)
     coin_symbol        : Mapped[Optional[str]]     = mapped_column(String(20), nullable=True)
+    timeframe          : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
+    is_reference_only  : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
     youtuber_zone_low  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     youtuber_zone_high : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     entry_price_1      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 안정형
@@ -76,6 +81,8 @@ class Analysis(Base):
     absolute_stop      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 마지노선
     stop_loss_price    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     take_profit_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    short_entry_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    short_stop_loss    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     risk_reward_ratio  : Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
     current_rsi        : Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     rsi_signal         : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
@@ -97,8 +104,11 @@ class Analysis(Base):
 class PriceAlert(Base):
     __tablename__ = "price_alerts"
     __table_args__ = (
-        CheckConstraint("alert_type IN ('ENTRY_1', 'ENTRY_2', 'ENTRY_3', 'STOP_LOSS', 'TAKE_PROFIT')", name="price_alerts_type_check"),
-        CheckConstraint("status IN ('PENDING', 'TRIGGERED', 'CANCELLED')", name="price_alerts_status_check"),
+        CheckConstraint(
+            "alert_type IN ('ENTRY_1','ENTRY_2','ENTRY_3','ENTRY_4','ABSOLUTE_STOP','STOP_LOSS','TAKE_PROFIT','TAKE_PROFIT_2','SHORT_ENTRY')",
+            name="price_alerts_type_check",
+        ),
+        CheckConstraint("status IN ('PENDING','PENDING_SLOT','TRIGGERED','CANCELLED')", name="price_alerts_status_check"),
         Index("idx_price_alerts_analysis_id", "analysis_id"),
         Index("idx_price_alerts_coin_symbol", "coin_symbol"),
     )
@@ -209,6 +219,7 @@ class Trade(Base):
 
     id             : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     analysis_id    : Mapped[int]               = mapped_column(BigInteger, ForeignKey("analyses.id"), nullable=False)
+    position_id    : Mapped[Optional[int]]     = mapped_column(BigInteger, ForeignKey("positions.id"), nullable=True)
     symbol         : Mapped[str]               = mapped_column(String(20), nullable=False)
     side           : Mapped[str]               = mapped_column(String(10), nullable=False)
     qty            : Mapped[Decimal]           = mapped_column(Numeric(18, 8), nullable=False)
@@ -219,7 +230,58 @@ class Trade(Base):
     mode           : Mapped[str]               = mapped_column(String(20), nullable=False)
     executed_at    : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
 
-    analysis: Mapped[Analysis] = relationship("Analysis", back_populates="trades")
+    analysis : Mapped[Analysis]           = relationship("Analysis", back_populates="trades")
+    position : Mapped[Optional[Position]] = relationship("Position", back_populates="trades")
+
+
+class Position(Base):
+    __tablename__ = "positions"
+    __table_args__ = (
+        CheckConstraint("side IN ('LONG', 'SHORT')", name="positions_side_check"),
+        CheckConstraint("status IN ('OPEN', 'CLOSED')", name="positions_status_check"),
+        Index("idx_positions_analysis_id", "analysis_id"),
+        Index("idx_positions_coin_symbol", "coin_symbol"),
+        Index("idx_positions_status", "status"),
+    )
+
+    id                    : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    analysis_id           : Mapped[int]               = mapped_column(BigInteger, ForeignKey("analyses.id"), nullable=False)
+    coin_symbol           : Mapped[str]               = mapped_column(String(20), nullable=False)
+    side                  : Mapped[str]               = mapped_column(String(10), nullable=False)
+    avg_entry_price       : Mapped[Decimal]           = mapped_column(Numeric(18, 2), nullable=False)
+    initial_capital_usdt  : Mapped[Decimal]           = mapped_column(Numeric(18, 2), nullable=False)
+    leverage              : Mapped[int]               = mapped_column(SmallInteger, nullable=False)
+    current_qty           : Mapped[Decimal]           = mapped_column(Numeric(18, 8), nullable=False)
+    current_stop_loss     : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    current_take_profit_1 : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    current_take_profit_2 : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    tp1_executed          : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
+    add_buy_count         : Mapped[int]               = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    bybit_position_idx    : Mapped[Optional[int]]     = mapped_column(SmallInteger, nullable=True)
+    status                : Mapped[str]               = mapped_column(String(10), nullable=False, server_default=text("'OPEN'"))
+    opened_at             : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+    closed_at             : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
+
+    trades: Mapped[list[Trade]] = relationship("Trade", back_populates="position")
+
+
+class EconomicCalendar(Base):
+    __tablename__ = "economic_calendars"
+    __table_args__ = (
+        CheckConstraint("importance IN ('HIGH', 'MEDIUM', 'LOW')", name="econ_cal_importance_check"),
+        Index("idx_econ_cal_event_date", "event_date"),
+        Index("idx_econ_cal_importance", "importance"),
+    )
+
+    id          : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source      : Mapped[str]               = mapped_column(String(50), nullable=False, server_default=text("'finnhub'"))
+    external_id : Mapped[Optional[str]]     = mapped_column(String(255), nullable=True, unique=True)
+    event_name  : Mapped[str]               = mapped_column(Text, nullable=False)
+    event_date  : Mapped[date]              = mapped_column(Date, nullable=False)
+    event_time  : Mapped[Optional[Any]]     = mapped_column(Time, nullable=True)
+    importance  : Mapped[str]               = mapped_column(String(10), nullable=False)
+    description : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    created_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
 
 class Settings(Base):
