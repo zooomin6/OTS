@@ -30,7 +30,7 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 RELOAD_INTERVAL    = 60    # 초: DB 재조회 주기
 REDIS_DEDUP_TTL    = 1800  # 초: 중복 방지 30분
-MAX_OPEN_POSITIONS = 3
+MAX_OPEN_POSITIONS = 2  # BTC 50% / ETH 50%
 
 ALERT_TYPE_LABEL = {
     "ENTRY_1":       "안정형 진입",
