@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timedelta
 
 # Windows에서 asyncio 이벤트 루프 정책 문제 방지
 if sys.platform == "win32":
@@ -43,6 +44,33 @@ SELENIUM_URL    = os.environ.get("SELENIUM_URL", "http://selenium:4444/wd/hub") 
 
 # 게시글 본문에서 URL을 추출하는 정규식
 _URL_PATTERN = re.compile(r'https?://[^\s\]\)>\"\']+')
+
+
+def _parse_relative_date(text: str) -> datetime | None:
+    """유튜브 상대 시간 텍스트 → datetime 변환. 예: '3일 전' → 3일 전 datetime."""
+    now = datetime.now()
+    text = text.strip()
+    patterns = [
+        (r"(\d+)\s*분\s*전",   lambda n: now - timedelta(minutes=n)),
+        (r"(\d+)\s*시간\s*전", lambda n: now - timedelta(hours=n)),
+        (r"(\d+)\s*일\s*전",   lambda n: now - timedelta(days=n)),
+        (r"(\d+)\s*주\s*전",   lambda n: now - timedelta(weeks=n)),
+        (r"(\d+)\s*개월\s*전", lambda n: now - timedelta(days=n * 30)),
+        (r"(\d+)\s*년\s*전",   lambda n: now - timedelta(days=n * 365)),
+        (r"(\d+)\s*minute",    lambda n: now - timedelta(minutes=n)),
+        (r"(\d+)\s*hour",      lambda n: now - timedelta(hours=n)),
+        (r"(\d+)\s*day",       lambda n: now - timedelta(days=n)),
+        (r"(\d+)\s*week",      lambda n: now - timedelta(weeks=n)),
+        (r"(\d+)\s*month",     lambda n: now - timedelta(days=n * 30)),
+        (r"(\d+)\s*year",      lambda n: now - timedelta(days=n * 365)),
+    ]
+    for pattern, calc in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return calc(int(m.group(1)))
+    if "방금" in text or "just now" in text.lower():
+        return now
+    return None
 
 
 def _extract_links(text: str) -> list[dict]:
@@ -158,18 +186,16 @@ def _scrape_posts(driver: webdriver.Remote) -> list[dict]:
     elements = driver.find_elements(By.CSS_SELECTOR, "ytd-backstage-post-thread-renderer")
     for el in elements[:10]:  # 최신 10개만 처리
         try:
-            # 멤버십 전용 뱃지가 없으면 일반 게시글이므로 건너뜀
-            if not el.find_elements(By.CSS_SELECTOR, "span#sponsors-only-badge"):
-                continue
-
             # 본문 텍스트와 게시글 고유 ID 추출
             content  = el.find_element(By.CSS_SELECTOR, "#content-text").text.strip()
             time_el  = el.find_element(By.CSS_SELECTOR, "#published-time-text a")
             post_url = time_el.get_attribute("href") or ""
-            # URL 끝부분이 게시글 ID (예: ?lb=abc123 → abc123)
             post_id  = post_url.split("=")[-1] if "=" in post_url else post_url.split("/")[-1]
             if not content or not post_id:
                 continue
+
+            date_text    = time_el.text.strip()
+            published_at = _parse_relative_date(date_text) or datetime.now()
 
             # 게시글에 첨부된 이미지 URL 수집
             image_urls = []
@@ -190,12 +216,13 @@ def _scrape_posts(driver: webdriver.Remote) -> list[dict]:
             links = _extract_links(content)
 
             posts.append({
-                "post_id":    post_id,
-                "content":    content,
-                "channel_id": CHANNEL_ID,
-                "image_urls": image_urls,
-                "post_type":  post_type,
-                "links":      links,
+                "post_id":      post_id,
+                "content":      content,
+                "channel_id":   CHANNEL_ID,
+                "image_urls":   image_urls,
+                "post_type":    post_type,
+                "links":        links,
+                "published_at": published_at,
             })
         except Exception:
             continue  # 개별 게시글 파싱 실패 시 나머지 계속 진행
@@ -234,14 +261,15 @@ def _db_save_sync(posts: list[dict]) -> list[tuple[int, dict]]:
                 # 동일 post_id가 이미 있으면 무시 (ON CONFLICT DO NOTHING)
                 cur.execute(
                     "INSERT INTO posts (channel_id, post_id, content, post_type, image_urls, published_at) "
-                    "VALUES (%s, %s, %s, %s, %s::jsonb, NOW()) "
+                    "VALUES (%s, %s, %s, %s, %s::jsonb, %s) "
                     "ON CONFLICT (post_id) DO NOTHING RETURNING id",
                     (
                         post["channel_id"],
                         post["post_id"],
                         post["content"],
                         post["post_type"],
-                        json.dumps(post["image_urls"]),  # 리스트 → JSON 문자열
+                        json.dumps(post["image_urls"]),
+                        post["published_at"],
                     ),
                 )
                 row = cur.fetchone()

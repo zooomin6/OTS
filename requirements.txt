@@ -24,6 +24,7 @@ python-telegram-bot==21.6
 
 # Bybit
 pybit==5.7.0
+pycryptodome==3.21.0
 
 # Selenium
 selenium==4.25.0
