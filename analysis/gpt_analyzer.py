@@ -120,6 +120,183 @@ SYSTEM_PROMPT = """\
 ### 9. 무효화 조건
 - BUY 신호: "종가 기준 {zone_low 또는 absolute_stop} 하향 이탈" 형식으로 반드시 포함.
 - SELL 신호: "종가 기준 {zone_high} 상향 돌파" 형식으로 반드시 포함.
+
+### 10. 유튜버 언어 패턴 해석
+
+**지지·저항 표현** — 아래 표현이 나오면 해당 가격을 구간으로 인식:
+- "지지", "지지선", "지지대", "지지 구간", "지지 존" → 해당 가격 = 매수 구간 하단
+- "저항", "저항선", "저항대", "저항 구간", "저항 존" → 해당 가격 = 매도 구간 상단
+- "매수 자리", "매수 구간", "매수 존", "롱 자리", "롱 진입" → BUY 진입 구간
+- "매도 자리", "매도 구간", "숏 자리", "숏 진입" → SELL 진입 구간
+- "목표가", "1차 목표", "2차 목표", "TP", "익절" → take_profit
+- "손절", "SL", "스탑", "컷" → stop_loss_price
+- "마지노선", "절대 지지", "추세 붕괴", "시즌 종료", "구조 붕괴" → absolute_stop
+
+**시나리오 상태 표현**:
+- "유효", "아직 유효", "시나리오 유효" → 기존 시나리오 유지. signal_type = HOLD.
+- "무효", "시나리오 무효", "이탈" → 기존 시나리오 종료. is_active = FALSE 처리.
+- "업데이트", "수정", "변경" → 기존 시나리오 덮어쓰기. 새 가격으로 갱신.
+- "대기", "관망", "홀드" → HOLD.
+
+**추가매수 표현**:
+- "추가 매수", "추가매수", "분할 매수", "2차 진입", "3차 진입" → 해당 가격 = 다음 entry_price 레벨
+- "마지막 매수", "최후 매수", "끝 자리" → entry_price_4
+
+**게시글 유형 판단**:
+- 차트 이미지 + 가격 언급 → 신규 시나리오 또는 업데이트
+- 텍스트만 + "유효" → HOLD (기존 유지)
+- "오늘 하루", "단기", "단타" → HOURLY
+- "이번 주", "주간" → WEEKLY
+- "이번 달", "월간" → MONTHLY
+
+### 11. 코인 심볼 추론 (반드시 적용 — null 반환 최소화)
+
+코인 이름이 명시되지 않아도 **가격 범위**로 반드시 추론하세요.
+
+| 가격 범위 (USDT) | 코인 |
+|---|---|
+| 50,000 ~ 200,000 | BTC |
+| 20,000 ~ 50,000 | BTC (약세장) |
+| 1,800 ~ 5,000 | ETH |
+| 500 ~ 1,800 | ETH (약세장) |
+| 80 ~ 400 | SOL |
+| 0.3 ~ 5 | XRP |
+| 0.5 ~ 30 | LINK / AVAX / MATIC 등 중형 알트 |
+| 0.001 ~ 0.1 | PEPE / WIF 등 밈코인 |
+
+**추론 우선순위**:
+1. 텍스트에 코인명 직접 언급 → 그대로 사용
+2. entry_price 또는 stop_loss_price 범위 → 위 표 적용
+3. absolute_stop 범위 → 위 표 적용 (entry 없을 때 fallback)
+4. "비트/비트코인" → BTC, "이더/이더리움" → ETH
+5. 이 채널은 ETH를 가장 많이 다룸 → 코인 미언급 + 가격 1500~5000 범위면 ETH 확정
+6. 알트코인 게시글이나 가격 범위 불명확 시에만 null 허용
+
+**예시**:
+- "2050 아래에서 추가 매수" → 가격 2050 = ETH 범위 → coin_symbol = "ETH"
+- "89,000 손절" → 가격 89,000 = BTC 범위 → coin_symbol = "BTC"
+- "1920 아래부터 중요" → 가격 1920 = ETH 약세장 범위 → coin_symbol = "ETH"
+
+### 12. 이 채널 특화 언어 패턴
+
+이 유튜버의 고유 표현을 정확히 해석하세요:
+
+**차트/분석 용어**:
+- "트뷰", "트레이딩뷰" → TradingView 차트 링크
+- "60분", "60분 봉" → HOURLY / "4시간", "4H" → HOURLY / "일봉" → DAILY / "주봉" → WEEKLY
+- "주황 박스", "주황색 박스", "박스" → 유튜버가 차트에 표시한 매수/매도 구간
+- "A, B, C", "1번, 2번, 3번" → 엘리어트 파동 레이블 (분석 레퍼런스)
+- "마디", "3마디", "5마디" → 엘리어트 파동 카운트
+- "브리핑한 대로", "저번에 말한", "이전 시나리오대로" → 기존 시나리오 유효(HOLD)
+- "갈겨보리자", "매수를 갈겨", "갈기자" → BUY 신호 강도 강함
+- "슈팅", "쏘는 그림" → 상승 돌파 예상
+- "괴롭히고 있는" → 저항선 테스트 중 (HOLD)
+- "우횡보", "횡보" → 방향성 없음(HOLD)
+
+**매수 구조 표현**:
+- "1차 매수", "1차로 매수" → entry_price_1 (안정형 첫 진입)
+- "2차 매수", "추가로" → entry_price_2
+- "마지막 자리", "끝 자리", "4-3 자리" → entry_price_4 (초공격형)
+- "오늘 봉이 저가를 지키고 끝나면" → 확인 후 진입 조건 (조건부 BUY)
+- "조금 더 안전하게 하고 싶은 분" → 안정형(entry_price_1) 표현
+
+**시나리오 레이블**:
+- "메인 시나리오" → 핵심 시나리오 유효
+- "서브 시나리오", "대안" → 보조 시나리오 (is_reference_only 고려)
+- "시나리오 살아있다", "아직 살아있음" → HOLD (기존 유지)
+
+**매수 강도 표현** (강할수록 확신 높은 BUY):
+- "갈겨보리자", "매수를 갈겨", "갈기세요", "조져보겠음", "1차로 갈기자" → BUY, 강한 확신
+- "바겐세일", "바겐세일~" → 할인 구간 적극 매수 (BUY, 높은 확신)
+- "개꿀", "포텐 좋다", "흐름이 좋음" → 긍정적 BUY
+- "일단 1차매수", "그냥 1차" → 가벼운 첫 진입 BUY
+- "없는데 잡고 싶다", "포지션 없는데 매수하고 싶다" → 진입 탐색 중 (BUY 예비)
+
+**차트 구간 표현**:
+- "주황색 구간", "주황 박스", "주황색 되돌림" → 차트에 표시된 핵심 매수/지지 구간
+- "주황색 아래로 잠기면" → 해당 구간 이탈 = 손절 조건 (stop_loss)
+- "A 위아래에서", "B 구간", "A 부근" → 차트 레이블 기준 진입 구간
+- "위아래로 잘 비비면" → 해당 구간 횡보 예상, HOLD
+- "체크 구간에서 시작" → 해당 가격 돌파 확인 후 진입 (조건부 BUY)
+
+**엘리어트 파동 기반 진입 타이밍**:
+- "4-3 자리", "4-3이라면" → 4번 파동의 3번째 눌림 = 강한 매수 자리
+- "5마디 완성", "5파 완성" → 상승 끝물 주의
+- "3마디", "A·B·C 완성" → 조정 완료 후 반등 기대
+- "동그라미 12345" → 엘리어트 임펄스 파동 카운팅 중
+
+**리스크 관리 표현**:
+- "주황색 아래로 잠기면 짧게 손절" → tight stop, 구간 이탈 즉시 손절
+- "본전 스탑 및 끌어올리기", "본전 스탑" → 진입 후 수익 시 SL을 진입가로 이동
+- "오늘 봉이 어제 저가를 지키면", "봉 나오는 거 보고" → 캔들 종가 확인 조건부 진입
+- "분할의 정도는 본인 리스크 감내도에 따라" → 비율 미지정, entry_ratio는 null
+
+**이 유튜버의 기술적 분석 체계** (분석 판단에 활용):
+
+① **다중 타임프레임 하향식 분석 (Top-Down)**
+   - 항상 큰 봉(주봉/일봉)으로 큰 그림 먼저 → 작은 봉(60분/15분)으로 진입 타이밍
+   - "주봉에서 추세선 지키면서", "일봉 단위로 크게 조정" → 큰 그림 기준
+   - "60분 봉으로 진입" → 작은 봉 타이밍 진입
+
+② **핵심 가격 레벨 ("맥점")**
+   - "맥점" = 가장 중요한 지지/저항 가격 → entry_price_1 또는 youtuber_zone으로 추출
+   - "안착" = 해당 가격 위에서 종가 마감 확인 → 확인 후 BUY 조건
+   - "리테스트" = 이전 지지/저항 재방문 → 진입 기회
+   - "매물대" = 과거 거래 집중 구간, 저항/지지로 작용
+
+③ **엘리어트 파동 + 다이버전스 조합**
+   - "12345" 상승 5파 완성 근처 → 조정 주의, HOLD 또는 약한 BUY
+   - "ABC 조정 완료" → 다음 상승 시작, BUY 신호
+   - "다이버전스 걸리면서" = RSI와 가격 방향 불일치 → 반전 신호 강화
+   - "상승 다이버전스" → 하락 중 RSI 상승 = BUY 강화
+   - "하락 다이버전스" → 상승 중 RSI 하락 = SELL/주의
+
+④ **시장 지배력 지표 (도미넌스) 활용**
+   - "OTHERS.D" = 알트코인 도미넌스. 상승 안착 → 알트 시즌 임박, BUY 강화
+   - "USDT.D" = 달러 도미넌스. 하락 → 위험자산 선호 → BUY 환경
+   - "ETH/BTC" = 이더리움 상대 강도. 상승 → ETH 강세 구간
+   - "BTC.D" = 비트 도미넌스. 하락 → 알트 강세
+
+⑤ **캔들 종가 확인 원칙**
+   - "봉이 저가를 지키고 끝나는지" → 당일 봉 종가로 지지 확인 후 진입
+   - "종가 기준 이탈" → 장중 이탈이 아닌 종가 기준 손절 판단
+   - "일봉 아래 파란색 추세선" → 추세선 하향 이탈 = absolute_stop
+
+⑥ **컬러 기반 차트 구간**
+   - 주황색(orange) 박스/추세선 → 핵심 매수 구간 또는 단기 지지
+   - 파란색(blue) 추세선 → 중장기 핵심 추세선, 이탈 시 시즌 종료 수준
+   - 분홍색(pink) 박스 → 저항 구간
+   - "색깔 아래로 잠기면" → 해당 색깔 구간 하향 이탈 = 손절 조건
+
+**매크로/외부 리스크 표현** (분석 영향 없음, 무시):
+- "전쟁 이슈", "트럼프 입놀림", "뉴스" → 외부 변수 언급, 시나리오 자체는 유효
+
+**무시할 게시글 패턴** (signal_type=HOLD, 가격 추출 없음):
+- "ㄱㄱㄱ" 연속 → 단순 반응/응원 게시글
+- 생일 축하, 개인 일상 내용만 있는 경우
+- "롯됐음", 짧은 감탄사만 있는 경우
+
+### 13. 차트 레이블 전용 게시글 처리
+
+**텍스트에 구체적 가격 숫자가 없고 차트 레이블(A, B, C, 주황박스 등)만 언급된 경우**:
+- signal_type은 맥락에 따라 BUY/SELL/HOLD 판단
+- entry_price는 모두 null (차트 없이는 가격 확정 불가)
+- summary에 "차트 이미지에서 A/B 구간 확인 필요" 명시
+- 단, 텍스트 내 다른 가격(absolute_stop, SL 등)이 있으면 코인 추론에 활용
+
+**이미지 없거나 이미지 URL 만료된 경우**:
+- 텍스트만으로 분석 가능한 모든 정보를 추출
+- "이미지 확인 불가" 등의 이유로 signal_type=HOLD로 낮추지 말 것
+- 텍스트 맥락이 BUY면 BUY, 가격 추론 가능하면 entry_price 채울 것
+
+### 14. 진입가 자동 추론 (가격 언급 있으나 entry_price 불명확할 때)
+
+유튜버가 명확한 진입가를 제시하지 않아도 다음 규칙으로 entry_price_1을 채우세요:
+- "X 부근에서 매수" → entry_price_1 = X
+- "X 위에서 매수" → entry_price_1 = X × 1.005 (0.5% 위)
+- "X 아래에서 매수" → entry_price_1 = X × 0.995 (0.5% 아래)
+- "X ~ Y 구간 매수" → entry_price_1 = Y (상단, 안정형), entry_price_2 = (X+Y)/2, entry_price_3 = X (하단, 공격형)
+- 이미 매수 중 "추가 매수 X" → entry_price_2 또는 entry_price_3 = X
 """
 
 
@@ -302,6 +479,57 @@ def _create_price_alerts_sync(
         conn.close()
 
 
+# ── 채널 패턴 학습 컨텍스트 ──────────────────────────────────
+
+def _fetch_recent_context_sync(limit: int = 8) -> str:
+    """
+    최근 BUY/SELL 분석 결과를 few-shot 예시로 반환.
+    GPT가 이 유튜버의 최신 패턴을 보고 새 게시글을 분석할 수 있도록 한다.
+    """
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.content, a.signal_type, a.coin_symbol, a.timeframe,
+                       a.entry_price_1, a.entry_price_2, a.entry_price_3,
+                       a.stop_loss_price, a.take_profit_price, a.summary
+                FROM analyses a
+                JOIN posts p ON a.post_id = p.id
+                WHERE a.signal_type IN ('BUY', 'SELL')
+                  AND a.summary IS NOT NULL AND a.summary != ''
+                  AND a.coin_symbol IS NOT NULL
+                ORDER BY a.created_at DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return ""
+
+    examples = []
+    for row in reversed(rows):  # 오래된 것부터 → 최신 순서로
+        content_preview, signal, coin, tf, e1, e2, e3, sl, tp, summary = row
+        tf_str = tf or "미확인"
+        e_str = " / ".join(
+            f"{v:,.0f}" for v in [e1, e2, e3] if v
+        ) or "-"
+        sl_str = f"{sl:,.0f}" if sl else "-"
+        examples.append(
+            f"[예시] 게시글: {content_preview[:120]}...\n"
+            f"→ 신호:{signal} 코인:{coin} 타임프레임:{tf_str} "
+            f"진입가:{e_str} 손절:{sl_str}\n"
+            f"→ 요약: {summary[:100]}"
+        )
+
+    return (
+        "\n\n--- 이 채널의 최근 분석 패턴 참고 (few-shot) ---\n"
+        + "\n\n".join(examples)
+        + "\n--- 위 패턴을 참고해 아래 새 게시글을 분석하세요 ---\n"
+    )
+
+
 # ── GPT-4o ───────────────────────────────────────────────────
 
 async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -> dict:
@@ -315,17 +543,22 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
+    # 최근 분석 패턴 컨텍스트 (few-shot learning)
+    loop = asyncio.get_event_loop()
+    recent_ctx = await loop.run_in_executor(None, _fetch_recent_context_sync)
+    full_content = (recent_ctx + content) if recent_ctx else content
+
     # 텍스트 + 이미지를 하나의 메시지로 구성
     # 이미지가 없으면 단순 텍스트 메시지, 있으면 멀티모달 메시지
     if image_urls:
-        user_content: list = [{"type": "text", "text": content}]
+        user_content: list = [{"type": "text", "text": full_content}]
         for url in image_urls[:5]:  # 최대 5장 (비용 절감)
             user_content.append({
                 "type": "image_url",
                 "image_url": {"url": url, "detail": "high"},  # high: 차트 수치를 정확히 읽기 위해 고해상도 모드
             })
     else:
-        user_content = content  # type: ignore[assignment]
+        user_content = full_content  # type: ignore[assignment]
 
     response = await client.chat.completions.create(
         model="gpt-4o",
@@ -337,6 +570,8 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
         temperature=0.3,
     )
     raw = response.choices[0].message.content
+    if not raw:
+        raise ValueError(f"GPT 빈 응답 (finish_reason={response.choices[0].finish_reason})")
     parsed = json.loads(raw)
     timeframe = parsed.get("timeframe")
     if timeframe:
@@ -345,7 +580,7 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
             timeframe = None
 
     return {
-        "signal_type":        parsed.get("signal_type", "HOLD").upper(),
+        "signal_type":        (parsed.get("signal_type") or "HOLD").upper(),
         "coin_symbol":        parsed.get("coin_symbol"),
         "timeframe":          timeframe,
         "is_reference_only":  timeframe in ("MONTHLY", "WEEKLY"),
@@ -558,6 +793,14 @@ async def _process(msg_value: bytes) -> None:
 
     # Telegram 알림
     await _send_telegram(analysis_id, result, post["content"])
+
+    # BUY/SELL 신호 → 포지션 싱크 (지정가 주문 등록 또는 Telegram 안내)
+    if result["signal_type"] in ("BUY", "SELL") and not result["is_reference_only"]:
+        try:
+            from trading.position_sync import sync_analysis
+            await sync_analysis(analysis_id)
+        except Exception as e:
+            print(f"[analyzer] position sync 실패: {e}")
 
 
 # ── 실행 루프 ─────────────────────────────────────────────────

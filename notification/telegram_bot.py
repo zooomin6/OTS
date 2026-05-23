@@ -35,7 +35,7 @@ TIMEFRAME_LABEL = {
 AVAILABLE_COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX"]
 
 # ConversationHandler 상태
-(STEP_RISK, STEP_ASSET, STEP_LEVERAGE, STEP_MODE, STEP_AUTO_RATIO, STEP_COINS) = range(6)
+(STEP_RISK, STEP_ASSET, STEP_BTC_LEVERAGE, STEP_ETH_LEVERAGE, STEP_MODE, STEP_AUTO_RATIO, STEP_COINS) = range(7)
 
 
 # ── DB 헬퍼 ──────────────────────────────────────────────────
@@ -63,7 +63,8 @@ def _get_user_profile(telegram_user_id: int) -> dict | None:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT risk_tolerance, total_asset_krw, leverage,
-                       trading_mode, auto_ratio, preferred_coins, onboarding_completed
+                       trading_mode, auto_ratio, preferred_coins,
+                       onboarding_completed, leverage_config
                 FROM user_profiles
                 WHERE telegram_user_id = %s
             """, (telegram_user_id,))
@@ -72,12 +73,13 @@ def _get_user_profile(telegram_user_id: int) -> dict | None:
                 return None
             return {
                 "risk_tolerance":       row[0],
-                "total_asset_krw":      row[1],
+                "total_asset_usdt":     row[1],
                 "leverage":             row[2],
                 "trading_mode":         row[3],
                 "auto_ratio":           row[4],
                 "preferred_coins":      row[5] or [],
                 "onboarding_completed": row[6],
+                "leverage_config":      row[7] or {},
             }
     finally:
         conn.close()
@@ -87,8 +89,8 @@ def _save_user_profile(
     telegram_user_id: int,
     telegram_username: str | None,
     risk_tolerance: str,
-    total_asset_krw: int,
-    leverage: int,
+    total_asset_usdt: int,
+    leverage_config: dict,
     trading_mode: str,
     auto_ratio: int,
     preferred_coins: list[str],
@@ -100,14 +102,15 @@ def _save_user_profile(
             cur.execute("""
                 INSERT INTO user_profiles
                     (telegram_user_id, telegram_username, risk_tolerance,
-                     total_asset_krw, leverage, trading_mode, auto_ratio,
+                     total_asset_krw, leverage, leverage_config, trading_mode, auto_ratio,
                      preferred_coins, onboarding_completed, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, TRUE, NOW())
                 ON CONFLICT (telegram_user_id) DO UPDATE SET
                     telegram_username    = EXCLUDED.telegram_username,
                     risk_tolerance       = EXCLUDED.risk_tolerance,
                     total_asset_krw      = EXCLUDED.total_asset_krw,
                     leverage             = EXCLUDED.leverage,
+                    leverage_config      = EXCLUDED.leverage_config,
                     trading_mode         = EXCLUDED.trading_mode,
                     auto_ratio           = EXCLUDED.auto_ratio,
                     preferred_coins      = EXCLUDED.preferred_coins,
@@ -115,7 +118,10 @@ def _save_user_profile(
                     updated_at           = NOW()
             """, (
                 telegram_user_id, telegram_username, risk_tolerance,
-                total_asset_krw, leverage, trading_mode, auto_ratio,
+                total_asset_usdt,
+                leverage_config.get("BTC", 1),
+                json.dumps(leverage_config),
+                trading_mode, auto_ratio,
                 json.dumps(preferred_coins),
             ))
         conn.commit()
@@ -398,24 +404,16 @@ async def _step_risk(update, context) -> int:
 
     await query.edit_message_text(
         f"✅ 투자 성향: *{risk}*\n\n"
-        "*2/6* 총 투자 가능 자산을 입력해 주세요 (원 단위):\n"
-        "_예: 5000000_",
+        "*2/6* 총 투자 가능 자산을 입력해 주세요 (USDT):\n"
+        "_예: 1000_",
         parse_mode="Markdown",
     )
     return STEP_ASSET
 
 
-async def _step_asset(update, context) -> int:
+def _leverage_keyboard():
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-    text = update.message.text.strip().replace(",", "")
-    if not text.isdigit():
-        await update.message.reply_text("숫자만 입력해 주세요. (예: 5000000)")
-        return STEP_ASSET
-
-    context.user_data["total_asset_krw"] = int(text)
-
-    keyboard = [
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("1x",  callback_data="lev:1"),
             InlineKeyboardButton("3x",  callback_data="lev:3"),
@@ -427,24 +425,50 @@ async def _step_asset(update, context) -> int:
             InlineKeyboardButton("30x", callback_data="lev:30"),
             InlineKeyboardButton("50x", callback_data="lev:50"),
         ],
-    ]
+    ])
+
+
+async def _step_asset(update, context) -> int:
+    text = update.message.text.strip().replace(",", "").replace(".", "")
+    if not text.isdigit() or int(text) <= 0:
+        await update.message.reply_text("숫자만 입력해 주세요. (예: 1000)")
+        return STEP_ASSET
+
+    context.user_data["total_asset_usdt"] = int(text)
+
     await update.message.reply_text(
-        f"✅ 자산: *{int(text):,}원*\n\n"
-        "*3/6* 레버리지 배수를 선택해 주세요:",
+        f"✅ 자산: *${int(text):,} USDT*\n\n"
+        "*3/6* BTC 레버리지 배수를 선택해 주세요:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=_leverage_keyboard(),
     )
-    return STEP_LEVERAGE
+    return STEP_BTC_LEVERAGE
 
 
-async def _step_leverage(update, context) -> int:
+async def _step_btc_leverage(update, context) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    lev = int(query.data.split(":")[1])
+    context.user_data["leverage_btc"] = lev
+
+    await query.edit_message_text(
+        f"✅ BTC 레버리지: *{lev}x*\n\n"
+        "*4/6* ETH 레버리지 배수를 선택해 주세요:",
+        parse_mode="Markdown",
+        reply_markup=_leverage_keyboard(),
+    )
+    return STEP_ETH_LEVERAGE
+
+
+async def _step_eth_leverage(update, context) -> int:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     query = update.callback_query
     await query.answer()
 
     lev = int(query.data.split(":")[1])
-    context.user_data["leverage"] = lev
+    context.user_data["leverage_eth"] = lev
 
     keyboard = [
         [InlineKeyboardButton("자동매매 — GPT 분석 즉시 실행",    callback_data="tmode:AUTO")],
@@ -453,8 +477,8 @@ async def _step_leverage(update, context) -> int:
         [InlineKeyboardButton("알림만 — 매매 없이 신호만 수신",    callback_data="tmode:NOTIFY_ONLY")],
     ]
     await query.edit_message_text(
-        f"✅ 레버리지: *{lev}x*\n\n"
-        "*4/6* 매매 방식을 선택해 주세요:",
+        f"✅ ETH 레버리지: *{lev}x*\n\n"
+        "*5/6* 매매 방식을 선택해 주세요:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -557,12 +581,16 @@ async def _finish_onboarding(query, context) -> int:
     user = query.from_user
     d = context.user_data
 
+    leverage_config = {
+        "BTC": d.get("leverage_btc", 1),
+        "ETH": d.get("leverage_eth", 1),
+    }
     _save_user_profile(
         telegram_user_id=user.id,
         telegram_username=user.username,
         risk_tolerance=d.get("risk_tolerance", "MODERATE"),
-        total_asset_krw=d.get("total_asset_krw", 0),
-        leverage=d.get("leverage", 1),
+        total_asset_usdt=d.get("total_asset_usdt", 0),
+        leverage_config=leverage_config,
         trading_mode=d.get("trading_mode", "SEMI_AUTO"),
         auto_ratio=d.get("auto_ratio", 0),
         preferred_coins=d.get("selected_coins", []),
@@ -574,8 +602,8 @@ async def _finish_onboarding(query, context) -> int:
     await query.edit_message_text(
         "🎉 *온보딩 완료!*\n\n"
         f"투자 성향: *{d.get('risk_tolerance')}*\n"
-        f"자산: *{d.get('total_asset_krw', 0):,}원*\n"
-        f"레버리지: *{d.get('leverage')}x*\n"
+        f"자산: *${d.get('total_asset_usdt', 0):,} USDT*\n"
+        f"BTC 레버리지: *{d.get('leverage_btc', 1)}x* | ETH 레버리지: *{d.get('leverage_eth', 1)}x*\n"
         f"매매 방식: *{mode_label}*\n"
         f"관심 코인: *{coins_str}*\n\n"
         "이제 투자 신호를 받을 준비가 되었습니다!\n"
@@ -713,7 +741,29 @@ async def _callback_setmode(update, context) -> None:
     _update_user_mode(query.from_user.id, mode)
 
     label = MODE_LABEL.get(mode, mode)
-    await query.edit_message_text(f"✅ 매매 모드 변경: *{label}*", parse_mode="Markdown")
+    lines = [f"✅ 매매 모드 변경: *{label}*"]
+
+    coins = _get_active_coins()
+    if coins:
+        lines.append("\n*📊 현재 활성 시나리오*")
+        for c in coins:
+            emoji = SIGNAL_EMOJI.get(c["signal"], "⚪")
+            s = _get_latest_scenario(c["coin"])
+            if s:
+                e1 = f"`${s['entry_price_1']:,.0f}`" if s.get("entry_price_1") else "-"
+                sl = f"`${s['stop_loss_price']:,.0f}`" if s.get("stop_loss_price") else "-"
+                tp = f"`${s['take_profit_price']:,.0f}`" if s.get("take_profit_price") else "-"
+                tf = TIMEFRAME_LABEL.get(s.get("timeframe", ""), "")
+                lines.append(
+                    f"{emoji} *{c['coin']}* {tf}\n"
+                    f"  진입1: {e1} | 손절: {sl} | 목표: {tp}"
+                )
+            else:
+                lines.append(f"{emoji} *{c['coin']}*")
+    else:
+        lines.append("\n현재 활성 시나리오 없음")
+
+    await query.edit_message_text("\n".join(lines), parse_mode="Markdown")
 
 
 # ── 공통 포맷터 ───────────────────────────────────────────────
@@ -768,12 +818,13 @@ def run_bot() -> None:
     onboarding = ConversationHandler(
         entry_points=[CommandHandler("start", _cmd_start)],
         states={
-            STEP_RISK:       [CallbackQueryHandler(_step_risk,       pattern="^risk:")],
-            STEP_ASSET:      [MessageHandler(filters.TEXT & ~filters.COMMAND, _step_asset)],
-            STEP_LEVERAGE:   [CallbackQueryHandler(_step_leverage,   pattern="^lev:")],
-            STEP_MODE:       [CallbackQueryHandler(_step_mode,       pattern="^tmode:")],
-            STEP_AUTO_RATIO: [CallbackQueryHandler(_step_auto_ratio, pattern="^ratio:")],
-            STEP_COINS:      [CallbackQueryHandler(_step_coins,      pattern="^(coin:|coins:done)")],
+            STEP_RISK:         [CallbackQueryHandler(_step_risk,         pattern="^risk:")],
+            STEP_ASSET:        [MessageHandler(filters.TEXT & ~filters.COMMAND, _step_asset)],
+            STEP_BTC_LEVERAGE: [CallbackQueryHandler(_step_btc_leverage, pattern="^lev:")],
+            STEP_ETH_LEVERAGE: [CallbackQueryHandler(_step_eth_leverage, pattern="^lev:")],
+            STEP_MODE:         [CallbackQueryHandler(_step_mode,         pattern="^tmode:")],
+            STEP_AUTO_RATIO:   [CallbackQueryHandler(_step_auto_ratio,   pattern="^ratio:")],
+            STEP_COINS:        [CallbackQueryHandler(_step_coins,        pattern="^(coin:|coins:done)")],
         },
         fallbacks=[CommandHandler("start", _cmd_start)],
     )

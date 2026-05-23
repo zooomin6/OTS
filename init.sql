@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     total_asset_krw      BIGINT,
     leverage             SMALLINT      NOT NULL DEFAULT 1
                              CHECK (leverage BETWEEN 1 AND 50),
+    leverage_config      JSONB         NOT NULL DEFAULT '{}',
     trading_mode         VARCHAR(20)   NOT NULL DEFAULT 'SEMI_AUTO'
                              CHECK (trading_mode IN ('AUTO', 'SEMI_AUTO', 'MANUAL', 'NOTIFY_ONLY')),
     auto_ratio           SMALLINT      NOT NULL DEFAULT 50
