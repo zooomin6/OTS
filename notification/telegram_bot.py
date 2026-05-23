@@ -37,6 +37,27 @@ AVAILABLE_COINS = ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX"]
 # ConversationHandler 상태
 (STEP_RISK, STEP_ASSET, STEP_BTC_LEVERAGE, STEP_ETH_LEVERAGE, STEP_MODE, STEP_AUTO_RATIO, STEP_COINS) = range(7)
 
+# 사용자별 대화 이력 (봇 재시작 시 초기화)
+_chat_history: dict[int, list[dict]] = {}
+_MAX_HISTORY = 8
+
+CHAT_SYSTEM_PROMPT = """\
+당신은 OTS(One Trading System) AI 투자 어시스턴트입니다.
+사용자의 코인 선물 투자를 돕는 대화형 어시스턴트입니다.
+
+역할:
+- 현재 활성 투자 시나리오 설명 및 해석
+- 시장 상황 질문 답변 (시나리오 기반)
+- 진입/손절/목표가 판단 도움
+- 리스크 조언
+
+규칙:
+- 한국어로 간결하게 답변
+- 투자 판단의 최종 책임은 사용자에게 있음을 인지
+- 현재 시나리오에 없는 코인 질문은 "현재 시나리오 없음"으로 안내
+- 확실하지 않은 내용은 추측이라고 명시
+"""
+
 
 # ── DB 헬퍼 ──────────────────────────────────────────────────
 
@@ -731,6 +752,140 @@ async def _callback_scenario(update, context) -> None:
     await query.edit_message_text(_format_scenario(s), parse_mode="Markdown")
 
 
+async def _callback_feedback(update, context) -> None:
+    """✅ 맞음 / ❌ 틀림 버튼 처리."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":")  # fb:ok:123 or fb:bad:123
+    action = parts[1]
+    analysis_id = int(parts[2])
+
+    if action == "ok":
+        _save_feedback(analysis_id, "CORRECT", None)
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup([[
+                {"text": "✅ 검증 완료", "callback_data": "fb:done"}
+            ]])
+        )
+
+    elif action == "bad":
+        keyboard = [
+            [InlineKeyboardButton("시그널 오류 (BUY↔SELL↔HOLD)", callback_data=f"fb:fix:signal:{analysis_id}")],
+            [InlineKeyboardButton("코인 오류 (잘못된 코인)",       callback_data=f"fb:fix:coin:{analysis_id}")],
+            [InlineKeyboardButton("가격 오류 (진입가/손절 잘못됨)", callback_data=f"fb:fix:price:{analysis_id}")],
+            [InlineKeyboardButton("전체 오류 (분석 자체가 잘못됨)", callback_data=f"fb:fix:all:{analysis_id}")],
+        ]
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif action == "fix":
+        fix_type = parts[2]
+        analysis_id = int(parts[3])
+        note_map = {
+            "signal": "시그널 오류",
+            "coin":   "코인 오류",
+            "price":  "가격 오류",
+            "all":    "전체 오류",
+        }
+        note = note_map.get(fix_type, fix_type)
+        _save_feedback(analysis_id, "INCORRECT", note)
+
+        # 현재 분석값 조회해서 수정 양식 구성
+        s = _get_analysis_by_id(analysis_id)
+        context.user_data["pending_correction"] = analysis_id
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([]))
+
+        if s:
+            def _f(v): return f"{float(v):,.0f}" if v else "-"
+            template = (
+                f"현재 분석 내용:\n"
+                f"  시그널: `{s['signal_type']}` | 코인: `{s['coin_symbol'] or '없음'}`\n"
+                f"  진입1: `{_f(s['entry_price_1'])}` / 진입2: `{_f(s['entry_price_2'])}` / 진입3: `{_f(s['entry_price_3'])}`\n"
+                f"  손절: `{_f(s['stop_loss_price'])}` / 목표: `{_f(s['take_profit_price'])}`\n\n"
+                "올바른 내용을 입력하세요:\n"
+                "예) `ETH BUY 진입1=2150 진입2=2100 진입3=2050 손절=1950 목표=2400`\n"
+                "_수정할 항목만 입력해도 됩니다_"
+            )
+        else:
+            template = "올바른 내용을 자유롭게 입력하세요."
+
+        await query.message.reply_text(
+            f"❌ *{note}* 로 기록됐습니다.\n\n{template}\n\n_건너뛰려면 /skip_",
+            parse_mode="Markdown",
+        )
+
+    elif action == "done":
+        await query.answer("이미 처리됐습니다.")
+
+
+def _get_analysis_by_id(analysis_id: int) -> dict | None:
+    """분석 ID로 단일 분석 결과를 반환한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT signal_type, coin_symbol,
+                       entry_price_1, entry_price_2, entry_price_3,
+                       stop_loss_price, take_profit_price
+                FROM analyses WHERE id = %s
+            """, (analysis_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "signal_type":       row[0],
+                "coin_symbol":       row[1],
+                "entry_price_1":     row[2],
+                "entry_price_2":     row[3],
+                "entry_price_3":     row[4],
+                "stop_loss_price":   row[5],
+                "take_profit_price": row[6],
+            }
+    finally:
+        conn.close()
+
+
+def _save_feedback(analysis_id: int, feedback: str, note: str | None) -> None:
+    """analyses 테이블에 피드백을 저장한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE analyses SET feedback = %s, feedback_note = %s WHERE id = %s",
+                (feedback, note, analysis_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _handle_correction_or_chat(update, context) -> None:
+    """피드백 수정 입력 대기 중이면 수정 처리, 아니면 GPT 대화로 전달."""
+    analysis_id = context.user_data.get("pending_correction")
+    text = update.message.text.strip()
+
+    if analysis_id and not text.startswith("/"):
+        context.user_data.pop("pending_correction")
+        conn = _db_connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE analyses SET feedback_note = COALESCE(feedback_note, '') || ' | 수정: ' || %s WHERE id = %s",
+                    (text, analysis_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        await update.message.reply_text(f"✅ 수정 내용 저장 완료\n_{text[:100]}_", parse_mode="Markdown")
+        return
+
+    await _handle_chat(update, context)
+
+
 async def _callback_setmode(update, context) -> None:
     """/mode 버튼 클릭 처리 — settings + user_profiles 동시 갱신."""
     query = update.callback_query
@@ -800,6 +955,106 @@ def _format_scenario(s: dict) -> str:
     return "\n".join(lines)
 
 
+# ── GPT 대화 ─────────────────────────────────────────────────
+
+def _fetch_chat_context_sync() -> str:
+    """활성 시나리오·설정·최근 거래를 GPT 채팅 컨텍스트 문자열로 반환."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT mode, is_halted FROM settings WHERE id = 1")
+            settings_row = cur.fetchone()
+
+            cur.execute("""
+                SELECT coin_symbol, signal_type, timeframe,
+                       entry_price_1, entry_price_2, entry_price_3,
+                       stop_loss_price, take_profit_price, absolute_stop,
+                       summary, invalidation
+                FROM analyses
+                WHERE is_active = TRUE AND signal_type IN ('BUY','SELL')
+                  AND coin_symbol IS NOT NULL
+                ORDER BY created_at DESC LIMIT 5
+            """)
+            scenarios = cur.fetchall()
+
+            cur.execute("""
+                SELECT symbol, side, price, status, created_at
+                FROM trades ORDER BY created_at DESC LIMIT 3
+            """)
+            trades = cur.fetchall()
+    finally:
+        conn.close()
+
+    def fmt(v):
+        if v is None: return "-"
+        return f"{float(v):,.0f}" if float(v) >= 1 else f"{float(v):,.4f}"
+
+    lines = ["[현재 시스템 상태]"]
+    if settings_row:
+        lines.append(f"매매 모드: {settings_row[0]} | {'정지' if settings_row[1] else '운영 중'}")
+
+    if scenarios:
+        lines.append("\n[활성 투자 시나리오]")
+        for s in scenarios:
+            coin, sig, tf, e1, e2, e3, sl, tp, abs_stop, summary, inv = s
+            tf_str = {"DAILY": "일봉", "HOURLY": "시간봉", "WEEKLY": "주봉"}.get(tf or "", tf or "")
+            lines.append(
+                f"• {sig} {coin} ({tf_str})\n"
+                f"  진입: {fmt(e1)} / {fmt(e2)} / {fmt(e3)}\n"
+                f"  손절: {fmt(sl)} | 목표: {fmt(tp)} | 마지노선: {fmt(abs_stop)}\n"
+                f"  요약: {(summary or '')[:120]}\n"
+                f"  무효 조건: {(inv or '')[:80]}"
+            )
+    else:
+        lines.append("\n[활성 투자 시나리오 없음]")
+
+    if trades:
+        lines.append("\n[최근 거래]")
+        for symbol, side, price, status, _ in trades:
+            lines.append(f"• {symbol} {side} @ {fmt(price)} ({status})")
+
+    return "\n".join(lines)
+
+
+async def _handle_chat(update, context) -> None:
+    """명령어가 아닌 일반 텍스트 → GPT-4o mini와 대화."""
+    import asyncio
+    from openai import AsyncOpenAI
+
+    user_id = update.effective_user.id
+    user_message = update.message.text.strip()
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    loop = asyncio.get_event_loop()
+    db_ctx = await loop.run_in_executor(None, _fetch_chat_context_sync)
+
+    history = _chat_history.setdefault(user_id, [])
+
+    messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT + "\n\n" + db_ctx}]
+    messages.extend(history[-(  _MAX_HISTORY * 2):])
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=600,
+        )
+        reply = resp.choices[0].message.content
+
+        history.append({"role": "user",      "content": user_message})
+        history.append({"role": "assistant", "content": reply})
+        if len(history) > _MAX_HISTORY * 2:
+            _chat_history[user_id] = history[-(_MAX_HISTORY * 2):]
+
+        await update.message.reply_text(reply)
+    except Exception as e:
+        await update.message.reply_text(f"오류가 발생했습니다: {e}")
+
+
 # ── 봇 실행 ───────────────────────────────────────────────────
 
 def run_bot() -> None:
@@ -839,6 +1094,10 @@ def run_bot() -> None:
 
     app.add_handler(CallbackQueryHandler(_callback_scenario, pattern="^scenario:"))
     app.add_handler(CallbackQueryHandler(_callback_setmode,  pattern="^setmode:"))
+    app.add_handler(CallbackQueryHandler(_callback_feedback,  pattern="^fb:"))
+
+    # 피드백 수정 입력 → GPT 대화 순으로 우선순위
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_correction_or_chat))
 
     print("[telegram-bot] 시작 — 명령어 대기 중")
     app.run_polling()

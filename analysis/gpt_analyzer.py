@@ -492,13 +492,17 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
             cur.execute("""
                 SELECT p.content, a.signal_type, a.coin_symbol, a.timeframe,
                        a.entry_price_1, a.entry_price_2, a.entry_price_3,
-                       a.stop_loss_price, a.take_profit_price, a.summary
+                       a.stop_loss_price, a.take_profit_price, a.summary,
+                       a.feedback
                 FROM analyses a
                 JOIN posts p ON a.post_id = p.id
                 WHERE a.signal_type IN ('BUY', 'SELL')
                   AND a.summary IS NOT NULL AND a.summary != ''
                   AND a.coin_symbol IS NOT NULL
-                ORDER BY a.created_at DESC
+                  AND (a.feedback IS NULL OR a.feedback = 'CORRECT')
+                ORDER BY
+                  CASE WHEN a.feedback = 'CORRECT' THEN 0 ELSE 1 END,
+                  a.created_at DESC
                 LIMIT %s
             """, (limit,))
             rows = cur.fetchall()
@@ -510,14 +514,15 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
 
     examples = []
     for row in reversed(rows):  # 오래된 것부터 → 최신 순서로
-        content_preview, signal, coin, tf, e1, e2, e3, sl, tp, summary = row
+        content_preview, signal, coin, tf, e1, e2, e3, sl, tp, summary, feedback = row
         tf_str = tf or "미확인"
         e_str = " / ".join(
             f"{v:,.0f}" for v in [e1, e2, e3] if v
         ) or "-"
         sl_str = f"{sl:,.0f}" if sl else "-"
+        verified = " [검증됨✅]" if feedback == "CORRECT" else ""
         examples.append(
-            f"[예시] 게시글: {content_preview[:120]}...\n"
+            f"[예시{verified}] 게시글: {content_preview[:120]}...\n"
             f"→ 신호:{signal} 코인:{coin} 타임프레임:{tf_str} "
             f"진입가:{e_str} 손절:{sl_str}\n"
             f"→ 요약: {summary[:100]}"
@@ -702,15 +707,28 @@ async def _send_telegram(
 
     text = "\n".join(lines)
 
+    # BUY/SELL 신호만 피드백 버튼 추가 (HOLD는 버튼 없음)
+    reply_markup = None
+    if signal_type in ("BUY", "SELL"):
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "✅ 맞음", "callback_data": f"fb:ok:{analysis_id}"},
+                {"text": "❌ 틀림", "callback_data": f"fb:bad:{analysis_id}"},
+            ]]
+        }
+
     async with httpx.AsyncClient() as client:
         try:
+            payload: dict = {
+                "chat_id":    TELEGRAM_CHAT_ID,
+                "text":       text,
+                "parse_mode": "Markdown",
+            }
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
             await client.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id":    TELEGRAM_CHAT_ID,
-                    "text":       text,
-                    "parse_mode": "Markdown",
-                },
+                json=payload,
                 timeout=10,
             )
         except Exception as e:
