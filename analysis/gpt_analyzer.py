@@ -31,35 +31,54 @@ SYSTEM_PROMPT = """\
 유튜브 멤버십 투자 게시글(텍스트 + 이미지 차트)을 분석하여 반드시 아래 JSON 형식만 반환하세요. 설명 텍스트 없이 JSON만.
 
 {
-  "signal_type": "BUY" | "SELL" | "HOLD",
-  "coin_symbol": "BTC" | "ETH" | "SOL" | "XRP" | 기타심볼 | null,
-  "timeframe": "MONTHLY" | "WEEKLY" | "DAILY" | "HOURLY" | null,
-  "youtuber_zone_low": 유튜버가 제시한 매수/매도구간 하단 (숫자) | null,
-  "youtuber_zone_high": 유튜버가 제시한 매수/매도구간 상단 (숫자) | null,
-  "entry_price_1": 안정형 진입가 (숫자) | null,
-  "entry_price_2": 중립형 진입가 (숫자) | null,
-  "entry_price_3": 공격형 진입가 (숫자) | null,
-  "entry_price_4": 초공격형 진입가 — 마지막 매수/매도 (숫자) | null,
-  "entry_ratio_1": null,
-  "entry_ratio_2": null,
-  "entry_ratio_3": null,
-  "absolute_stop": 마지노선 — 이 아래면 시즌 종료 수준 (숫자) | null,
-  "stop_loss_price": 손절가 (숫자) | null,
-  "take_profit_price": 1차 목표 익절가 (숫자) | null,
-  "take_profit_price_2": 2차 목표 익절가 (숫자) | null,
-  "short_entry_price": SELL 신호 시 숏 진입 추천가 (숫자) | null,
-  "short_stop_loss": SELL 신호 시 숏 손절가 (숫자) | null,
-  "risk_reward_ratio": R:R 비율 (소수, 예: 2.5) | null,
-  "current_rsi": 게시글에 언급된 RSI 현재값 (숫자, 예: 43.37) | null,
-  "rsi_signal": "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT" | null,
-  "volume_signal": "HIGH" | "NORMAL" | "LOW" | null,
-  "fib_level": 가장 가까운 피보나치 레벨 (예: 0.618) | null,
-  "summary": "핵심 투자 내용 2~3문장 요약",
-  "invalidation": "이 분석이 무효화되는 조건",
-  "scenario": [
-    {"step": 1, "action": "액션 설명", "condition": "진입·청산 조건", "target_price": null}
-  ]
+  "analyses": [
+    {
+      "signal_type": "BUY" | "SELL" | "HOLD",
+      "coin_symbol": "BTC" | "ETH" | "SOL" | "XRP" | 기타심볼 | null,
+      "timeframe": "MONTHLY" | "WEEKLY" | "DAILY" | "HOURLY" | null,
+      "youtuber_zone_low": 유튜버가 제시한 매수/매도구간 하단 (숫자) | null,
+      "youtuber_zone_high": 유튜버가 제시한 매수/매도구간 상단 (숫자) | null,
+      "entry_price_1": 안정형 진입가 (숫자) | null,
+      "entry_price_2": 중립형 진입가 (숫자) | null,
+      "entry_price_3": 공격형 진입가 (숫자) | null,
+      "entry_price_4": 초공격형 진입가 — 마지막 매수/매도 (숫자) | null,
+      "entry_ratio_1": null,
+      "entry_ratio_2": null,
+      "entry_ratio_3": null,
+      "absolute_stop": 마지노선 — 이 아래면 시즌 종료 수준 (숫자) | null,
+      "stop_loss_price": 손절가 (숫자) | null,
+      "take_profit_price": 1차 목표 익절가 (숫자) | null,
+      "take_profit_price_2": 2차 목표 익절가 (숫자) | null,
+      "short_entry_price": SELL 신호 시 숏 진입 추천가 (숫자) | null,
+      "short_stop_loss": SELL 신호 시 숏 손절가 (숫자) | null,
+      "risk_reward_ratio": R:R 비율 (소수, 예: 2.5) | null,
+      "current_rsi": 게시글에 언급된 RSI 현재값 (숫자, 예: 43.37) | null,
+      "rsi_signal": "OVERSOLD" | "NEUTRAL" | "OVERBOUGHT" | null,
+      "volume_signal": "HIGH" | "NORMAL" | "LOW" | null,
+      "fib_level": 가장 가까운 피보나치 레벨 (예: 0.618) | null,
+      "summary": "핵심 투자 내용 2~3문장 요약",
+      "invalidation": "이 분석이 무효화되는 조건",
+      "scenario": [
+        {"step": 1, "action": "액션 설명", "condition": "진입·청산 조건", "target_price": null}
+      ]
+    }
+  ],
+  "market_indicators": {
+    "tether_d": {
+      "state": "BEARISH" | "BULLISH" | "NEUTRAL" | "WARNING" | null,
+      "key_level": "현재 테더.D의 핵심 구간 설명" | null,
+      "implication": "시장에 미치는 영향 한 문장" | null
+    },
+    "btc_dominance": {
+      "state": "RISING" | "FALLING" | "NEUTRAL" | null,
+      "implication": "BTC 도미넌스 변화가 알트에 미치는 영향" | null
+    }
+  }
 }
+
+**중요: 게시글에 여러 코인 또는 여러 타임프레임 분석이 포함된 경우, analyses 배열에 각각 분리해서 추가하세요.**
+예) "1. 테더.D ... 2. 이더 60분 봉 ... 3. 비트 주봉 ..." → analyses 배열에 3개 항목
+분석이 하나뿐이면 배열에 항목 1개. market_indicators는 최상위에 한 번만.
 
 ## 분석 원칙
 
@@ -271,6 +290,26 @@ SYSTEM_PROMPT = """\
 **매크로/외부 리스크 표현** (분석 영향 없음, 무시):
 - "전쟁 이슈", "트럼프 입놀림", "뉴스" → 외부 변수 언급, 시나리오 자체는 유효
 
+### 15. 시장 지표 추출 (market_indicators)
+
+게시글에 아래 지표가 언급되면 반드시 추출하세요.
+
+**테더.D (USDT 도미넌스)**:
+- "테더.D", "USDT.D", "테더 도미넌스" 언급 시 추출
+- state 판단:
+  - "A구간 위로 올라탔다", "상승 돌파", "위험 신호" → "WARNING" (알트 하락 압력)
+  - "A구간 아래로 잠겼다", "하락 전환", "떨어지고 있어" → "BULLISH" (알트 상승 여건)
+  - "횡보", "유지", "아직 판단 어려움" → "NEUTRAL"
+  - "급등", "크게 상승" → "BEARISH" (알트 위험)
+- key_level: 유튜버가 언급한 A구간, B추세선 등 핵심 레벨 설명
+- implication: "테더.D 상승 → 알트 하락 압력" 또는 "테더.D 하락 → 알트 상승 여건" 형태
+
+**BTC 도미넌스**:
+- "BTC.D", "비트 도미넌스" 언급 시 추출
+- 상승 → 알트 약세, 하락 → 알트 강세
+
+지표 언급이 없으면 해당 필드 null.
+
 **무시할 게시글 패턴** (signal_type=HOLD, 가격 추출 없음):
 - "ㄱㄱㄱ" 연속 → 단순 반응/응원 게시글
 - 생일 축하, 개인 일상 내용만 있는 경우
@@ -434,6 +473,37 @@ def _save_analysis_sync(
         conn.close()
 
 
+def _save_market_context_sync(post_db_id: int, indicators: dict) -> None:
+    """market_indicators 필드에서 테더.D 등 시장 지표를 market_context 테이블에 저장."""
+    if not indicators:
+        return
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            tether = indicators.get("tether_d") or {}
+            if tether.get("state"):
+                cur.execute(
+                    """
+                    INSERT INTO market_context (post_id, indicator, state, key_level, implication, summary)
+                    VALUES (%s, 'TETHER_D', %s, %s, %s, %s)
+                    """,
+                    (post_db_id, tether.get("state"), tether.get("key_level"),
+                     tether.get("implication"), tether.get("key_level")),
+                )
+            btc_d = indicators.get("btc_dominance") or {}
+            if btc_d.get("state"):
+                cur.execute(
+                    """
+                    INSERT INTO market_context (post_id, indicator, state, implication)
+                    VALUES (%s, 'BTC_D', %s, %s)
+                    """,
+                    (post_db_id, btc_d.get("state"), btc_d.get("implication")),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _create_price_alerts_sync(
     analysis_id: int,
     coin_symbol: str,
@@ -537,30 +607,68 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
 
 # ── GPT-4o ───────────────────────────────────────────────────
 
-async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -> dict:
-    """
-    게시글 텍스트와 이미지를 GPT-4o로 분석하고 파싱된 결과를 반환한다.
+def _parse_analysis_item(item: dict, raw: str) -> dict:
+    """GPT 응답의 analyses 배열 항목 하나를 정규화한다."""
+    timeframe = item.get("timeframe")
+    if timeframe:
+        timeframe = timeframe.upper()
+        if timeframe not in ("MONTHLY", "WEEKLY", "DAILY", "HOURLY"):
+            timeframe = None
+    return {
+        "signal_type":         (item.get("signal_type") or "HOLD").upper(),
+        "coin_symbol":         item.get("coin_symbol"),
+        "timeframe":           timeframe,
+        "is_reference_only":   timeframe in ("MONTHLY", "WEEKLY"),
+        "youtuber_zone_low":   item.get("youtuber_zone_low"),
+        "youtuber_zone_high":  item.get("youtuber_zone_high"),
+        "entry_price_1":       item.get("entry_price_1"),
+        "entry_price_2":       item.get("entry_price_2"),
+        "entry_price_3":       item.get("entry_price_3"),
+        "entry_price_4":       item.get("entry_price_4"),
+        "entry_ratio_1":       item.get("entry_ratio_1"),
+        "entry_ratio_2":       item.get("entry_ratio_2"),
+        "entry_ratio_3":       item.get("entry_ratio_3"),
+        "absolute_stop":       item.get("absolute_stop"),
+        "stop_loss_price":     item.get("stop_loss_price"),
+        "take_profit_price":   item.get("take_profit_price"),
+        "take_profit_price_2": item.get("take_profit_price_2"),
+        "short_entry_price":   item.get("short_entry_price"),
+        "short_stop_loss":     item.get("short_stop_loss"),
+        "risk_reward_ratio":   item.get("risk_reward_ratio"),
+        "current_rsi":         item.get("current_rsi"),
+        "rsi_signal":          item.get("rsi_signal"),
+        "volume_signal":       item.get("volume_signal"),
+        "fib_level":           item.get("fib_level"),
+        "summary":             item.get("summary", ""),
+        "invalidation":        item.get("invalidation", ""),
+        "scenario":            item.get("scenario", []),
+        "raw":                 raw,
+    }
 
-    이미지가 있으면 Vision 기능으로 차트에서 직접 수치를 읽는다.
-    이미지는 최대 5장까지만 전송 (비용·토큰 제한).
+
+async def _analyze_with_gpt(
+    content: str,
+    image_urls: list[str] | None = None,
+) -> tuple[list[dict], dict]:
+    """
+    게시글 텍스트와 이미지를 GPT-4o로 분석한다.
+    반환: (analyses 리스트, market_indicators 딕트)
+    게시글에 여러 코인/타임프레임이 있으면 analyses에 복수 항목이 담긴다.
     """
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-    # 최근 분석 패턴 컨텍스트 (few-shot learning)
     loop = asyncio.get_event_loop()
     recent_ctx = await loop.run_in_executor(None, _fetch_recent_context_sync)
     full_content = (recent_ctx + content) if recent_ctx else content
 
-    # 텍스트 + 이미지를 하나의 메시지로 구성
-    # 이미지가 없으면 단순 텍스트 메시지, 있으면 멀티모달 메시지
     if image_urls:
         user_content: list = [{"type": "text", "text": full_content}]
-        for url in image_urls[:5]:  # 최대 5장 (비용 절감)
+        for url in image_urls[:5]:
             user_content.append({
                 "type": "image_url",
-                "image_url": {"url": url, "detail": "high"},  # high: 차트 수치를 정확히 읽기 위해 고해상도 모드
+                "image_url": {"url": url, "detail": "high"},
             })
     else:
         user_content = full_content  # type: ignore[assignment]
@@ -577,43 +685,18 @@ async def _analyze_with_gpt(content: str, image_urls: list[str] | None = None) -
     raw = response.choices[0].message.content
     if not raw:
         raise ValueError(f"GPT 빈 응답 (finish_reason={response.choices[0].finish_reason})")
-    parsed = json.loads(raw)
-    timeframe = parsed.get("timeframe")
-    if timeframe:
-        timeframe = timeframe.upper()
-        if timeframe not in ("MONTHLY", "WEEKLY", "DAILY", "HOURLY"):
-            timeframe = None
 
-    return {
-        "signal_type":        (parsed.get("signal_type") or "HOLD").upper(),
-        "coin_symbol":        parsed.get("coin_symbol"),
-        "timeframe":          timeframe,
-        "is_reference_only":  timeframe in ("MONTHLY", "WEEKLY"),
-        "youtuber_zone_low":  parsed.get("youtuber_zone_low"),
-        "youtuber_zone_high": parsed.get("youtuber_zone_high"),
-        "entry_price_1":      parsed.get("entry_price_1"),
-        "entry_price_2":      parsed.get("entry_price_2"),
-        "entry_price_3":      parsed.get("entry_price_3"),
-        "entry_price_4":      parsed.get("entry_price_4"),
-        "entry_ratio_1":      parsed.get("entry_ratio_1"),
-        "entry_ratio_2":      parsed.get("entry_ratio_2"),
-        "entry_ratio_3":      parsed.get("entry_ratio_3"),
-        "absolute_stop":      parsed.get("absolute_stop"),
-        "stop_loss_price":    parsed.get("stop_loss_price"),
-        "take_profit_price":  parsed.get("take_profit_price"),
-        "take_profit_price_2":parsed.get("take_profit_price_2"),
-        "short_entry_price":  parsed.get("short_entry_price"),
-        "short_stop_loss":    parsed.get("short_stop_loss"),
-        "risk_reward_ratio":  parsed.get("risk_reward_ratio"),
-        "current_rsi":        parsed.get("current_rsi"),
-        "rsi_signal":         parsed.get("rsi_signal"),
-        "volume_signal":      parsed.get("volume_signal"),
-        "fib_level":          parsed.get("fib_level"),
-        "summary":            parsed.get("summary", ""),
-        "invalidation":       parsed.get("invalidation", ""),
-        "scenario":           parsed.get("scenario", []),
-        "raw":                raw,
-    }
+    parsed = json.loads(raw)
+    market_indicators = parsed.get("market_indicators", {})
+
+    analyses_raw = parsed.get("analyses")
+    if analyses_raw and isinstance(analyses_raw, list):
+        analyses = [_parse_analysis_item(a, raw) for a in analyses_raw]
+    else:
+        # 구형 단일 객체 포맷 fallback
+        analyses = [_parse_analysis_item(parsed, raw)]
+
+    return analyses, market_indicators
 
 
 # ── Telegram ─────────────────────────────────────────────────
@@ -740,85 +823,87 @@ async def _send_telegram(
 async def _process(msg_value: bytes) -> None:
     """Kafka 메시지 1건: 게시글 조회 → GPT 분석 → DB 저장 → 가격알림 등록 → Telegram."""
     data = json.loads(msg_value)
-    post_db_id  = data["post_id"]
-    # Kafka 메시지에 image_urls가 있으면 활용, 없으면 DB에서 가져온 값 사용
+    post_db_id   = data["post_id"]
     kafka_images = data.get("image_urls", [])
 
     loop = asyncio.get_event_loop()
 
-    # 게시글 조회 (image_urls, post_type 포함)
     post = await loop.run_in_executor(None, _fetch_post_sync, post_db_id)
     if not post:
         print(f"[analyzer] 게시글 없음: id={post_db_id}")
         return
 
-    # Kafka 메시지의 이미지가 있으면 우선 사용, 없으면 DB에서 가져온 것 사용
     image_urls = kafka_images or post.get("image_urls", [])
     print(f"[analyzer] 분석 시작: post_id={post_db_id}, 이미지 {len(image_urls)}개")
 
-    # GPT-4o 분석 (텍스트 + 이미지 Vision)
-    result = await _analyze_with_gpt(post["content"], image_urls=image_urls)
-    print(f"[analyzer] 신호: {result['signal_type']} | 코인: {result['coin_symbol']}")
+    analyses, market_indicators = await _analyze_with_gpt(post["content"], image_urls=image_urls)
+    print(f"[analyzer] 분석 결과: {len(analyses)}개 시나리오")
 
-    # DB 저장
-    save_fn = functools.partial(
-        _save_analysis_sync,
-        post_db_id,
-        result["signal_type"],
-        result["coin_symbol"],
-        result["timeframe"],
-        result["is_reference_only"],
-        result["youtuber_zone_low"],
-        result["youtuber_zone_high"],
-        result["entry_price_1"],
-        result["entry_price_2"],
-        result["entry_price_3"],
-        result["entry_price_4"],
-        result["entry_ratio_1"],
-        result["entry_ratio_2"],
-        result["entry_ratio_3"],
-        result["absolute_stop"],
-        result["stop_loss_price"],
-        result["take_profit_price"],
-        result["short_entry_price"],
-        result["short_stop_loss"],
-        result["risk_reward_ratio"],
-        result["current_rsi"],
-        result["rsi_signal"],
-        result["volume_signal"],
-        result["fib_level"],
-        result["summary"],
-        result["invalidation"],
-        result["scenario"],
-        result["raw"],
-    )
-    analysis_id = await loop.run_in_executor(None, save_fn)
-    print(f"[analyzer] 저장 완료: analysis_id={analysis_id}")
+    # 시장 지표 저장 (게시글당 1번)
+    if market_indicators:
+        ctx_fn = functools.partial(_save_market_context_sync, post_db_id, market_indicators)
+        await loop.run_in_executor(None, ctx_fn)
 
-    # MONTHLY/WEEKLY 참고용 분석은 가격 알림 생성 안 함
-    if result["coin_symbol"] and not result["is_reference_only"]:
-        alerts_fn = functools.partial(
-            _create_price_alerts_sync,
-            analysis_id,
+    # 각 분석 항목별로 저장 + 알림
+    for result in analyses:
+        print(f"[analyzer] 신호: {result['signal_type']} | 코인: {result['coin_symbol']} | TF: {result['timeframe']}")
+
+        save_fn = functools.partial(
+            _save_analysis_sync,
+            post_db_id,
+            result["signal_type"],
             result["coin_symbol"],
+            result["timeframe"],
+            result["is_reference_only"],
+            result["youtuber_zone_low"],
+            result["youtuber_zone_high"],
             result["entry_price_1"],
             result["entry_price_2"],
             result["entry_price_3"],
+            result["entry_price_4"],
+            result["entry_ratio_1"],
+            result["entry_ratio_2"],
+            result["entry_ratio_3"],
+            result["absolute_stop"],
             result["stop_loss_price"],
             result["take_profit_price"],
+            result["short_entry_price"],
+            result["short_stop_loss"],
+            result["risk_reward_ratio"],
+            result["current_rsi"],
+            result["rsi_signal"],
+            result["volume_signal"],
+            result["fib_level"],
+            result["summary"],
+            result["invalidation"],
+            result["scenario"],
+            result["raw"],
         )
-        await loop.run_in_executor(None, alerts_fn)
+        analysis_id = await loop.run_in_executor(None, save_fn)
+        print(f"[analyzer] 저장 완료: analysis_id={analysis_id}")
 
-    # Telegram 알림
-    await _send_telegram(analysis_id, result, post["content"])
+        if result["coin_symbol"] and not result["is_reference_only"]:
+            alerts_fn = functools.partial(
+                _create_price_alerts_sync,
+                analysis_id,
+                result["coin_symbol"],
+                result["entry_price_1"],
+                result["entry_price_2"],
+                result["entry_price_3"],
+                result["stop_loss_price"],
+                result["take_profit_price"],
+            )
+            await loop.run_in_executor(None, alerts_fn)
 
-    # BUY/SELL 신호 → 포지션 싱크 (지정가 주문 등록 또는 Telegram 안내)
-    if result["signal_type"] in ("BUY", "SELL") and not result["is_reference_only"]:
-        try:
-            from trading.position_sync import sync_analysis
-            await sync_analysis(analysis_id)
-        except Exception as e:
-            print(f"[analyzer] position sync 실패: {e}")
+        # BUY/SELL만 Telegram 알림 (HOLD는 알림 없음 — 다중 분석 시 스팸 방지)
+        if result["signal_type"] in ("BUY", "SELL"):
+            await _send_telegram(analysis_id, result, post["content"])
+            if not result["is_reference_only"]:
+                try:
+                    from trading.position_sync import sync_analysis
+                    await sync_analysis(analysis_id)
+                except Exception as e:
+                    print(f"[analyzer] position sync 실패: {e}")
 
 
 # ── 실행 루프 ─────────────────────────────────────────────────

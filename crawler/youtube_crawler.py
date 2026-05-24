@@ -212,8 +212,22 @@ def _scrape_posts(driver: webdriver.Remote) -> list[dict]:
             ))
             post_type = "video" if is_video else ("mixed" if image_urls else "text")
 
-            # 본문에서 트레이딩뷰·유튜브 링크 등 추출
+            # 텍스트 기반 링크 추출 (보조)
             links = _extract_links(content)
+
+            # <a href> 속성에서 전체 URL 추출 (YouTube가 텍스트는 잘라도 href는 온전함)
+            existing_urls = {l["url"] for l in links}
+            for a_el in el.find_elements(By.CSS_SELECTOR, "#content-text a"):
+                href = a_el.get_attribute("href") or ""
+                if not href or href in existing_urls:
+                    continue
+                if "tradingview.com" in href:
+                    links.append({"url": href, "link_type": "tradingview"})
+                elif "youtube.com" in href or "youtu.be" in href:
+                    links.append({"url": href, "link_type": "youtube"})
+                else:
+                    links.append({"url": href, "link_type": "other"})
+                existing_urls.add(href)
 
             posts.append({
                 "post_id":      post_id,

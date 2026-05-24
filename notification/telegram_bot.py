@@ -185,10 +185,15 @@ def _get_active_coins() -> list[dict]:
 
 
 def _get_latest_scenario(coin_symbol: str) -> dict | None:
-    """특정 코인의 가장 최근 활성 분석 결과를 반환한다."""
+    """
+    특정 코인의 시나리오를 반환한다.
+    진입가는 가장 최근 BUY/SELL에서, 현재 상태는 가장 최근 신호에서 가져온다.
+    HOLD가 와도 이전 BUY/SELL 진입가는 유지된다.
+    """
     conn = _db_connect()
     try:
         with conn.cursor() as cur:
+            # 1) 가장 최근 BUY/SELL — 진입가·손절가 기준
             cur.execute("""
                 SELECT signal_type, coin_symbol,
                        entry_price_1, entry_price_2, entry_price_3, entry_price_4,
@@ -197,29 +202,54 @@ def _get_latest_scenario(coin_symbol: str) -> dict | None:
                        summary, invalidation, created_at
                 FROM analyses
                 WHERE is_active = TRUE AND coin_symbol = %s
+                  AND signal_type IN ('BUY', 'SELL')
                 ORDER BY created_at DESC
                 LIMIT 1
             """, (coin_symbol.upper(),))
-            row = cur.fetchone()
-            if not row:
-                return None
-            return {
-                "signal_type":       row[0],
-                "coin_symbol":       row[1],
-                "entry_price_1":     row[2],
-                "entry_price_2":     row[3],
-                "entry_price_3":     row[4],
-                "entry_price_4":     row[5],
-                "stop_loss_price":   row[6],
-                "take_profit_price": row[7],
-                "timeframe":         row[8],
-                "is_reference_only": row[9],
-                "summary":           row[10],
-                "invalidation":      row[11],
-                "created_at":        row[12],
-            }
+            price_row = cur.fetchone()
+
+            # 2) 가장 최근 신호 — 현재 상태 표시용
+            cur.execute("""
+                SELECT signal_type, summary, created_at
+                FROM analyses
+                WHERE is_active = TRUE AND coin_symbol = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (coin_symbol.upper(),))
+            status_row = cur.fetchone()
+
     finally:
         conn.close()
+
+    if not price_row and not status_row:
+        return None
+
+    # 진입가 있는 BUY/SELL 기준으로 기본값 세팅
+    base = price_row or status_row
+    result = {
+        "signal_type":       base[0],
+        "coin_symbol":       base[1] if price_row else coin_symbol.upper(),
+        "entry_price_1":     base[2] if price_row else None,
+        "entry_price_2":     base[3] if price_row else None,
+        "entry_price_3":     base[4] if price_row else None,
+        "entry_price_4":     base[5] if price_row else None,
+        "stop_loss_price":   base[6] if price_row else None,
+        "take_profit_price": base[7] if price_row else None,
+        "timeframe":         base[8] if price_row else None,
+        "is_reference_only": base[9] if price_row else False,
+        "summary":           base[10] if price_row else None,
+        "invalidation":      base[11] if price_row else None,
+        "created_at":        base[12] if price_row else base[2],
+    }
+
+    # 최신 신호가 HOLD이고 이전 BUY/SELL이 있으면 → 상태 업데이트 표시
+    if status_row and price_row and status_row[0] == "HOLD":
+        hold_date = status_row[2].strftime("%m/%d") if status_row[2] else ""
+        result["hold_status"] = f"HOLD ({hold_date}) — {(status_row[1] or '')[:60]}"
+    else:
+        result["hold_status"] = None
+
+    return result
 
 
 def _save_memo(content: str, post_id: int | None = None) -> None:
@@ -249,6 +279,40 @@ def _get_recent_memos(limit: int = 5) -> list[dict]:
             """, (limit,))
             return [
                 {"id": r[0], "content": r[1], "created_at": r[2]}
+                for r in cur.fetchall()
+            ]
+    finally:
+        conn.close()
+
+
+def _get_tradingview_links(coin_symbol: str | None, limit: int = 5) -> list[dict]:
+    """최근 분석과 연결된 트레이딩뷰 링크를 반환한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            if coin_symbol:
+                cur.execute("""
+                    SELECT pl.url, a.coin_symbol, a.timeframe, p.published_at
+                    FROM post_links pl
+                    JOIN posts p ON pl.post_id = p.id
+                    LEFT JOIN analyses a ON a.post_id = p.id
+                    WHERE pl.link_type = 'tradingview'
+                      AND (a.coin_symbol = %s OR a.coin_symbol IS NULL)
+                    ORDER BY p.published_at DESC
+                    LIMIT %s
+                """, (coin_symbol.upper(), limit))
+            else:
+                cur.execute("""
+                    SELECT pl.url, a.coin_symbol, a.timeframe, p.published_at
+                    FROM post_links pl
+                    JOIN posts p ON pl.post_id = p.id
+                    LEFT JOIN analyses a ON a.post_id = p.id
+                    WHERE pl.link_type = 'tradingview'
+                    ORDER BY p.published_at DESC
+                    LIMIT %s
+                """, (limit,))
+            return [
+                {"url": r[0], "coin": r[1], "timeframe": r[2], "published_at": r[3]}
                 for r in cur.fetchall()
             ]
     finally:
@@ -382,7 +446,7 @@ async def _send(text: str) -> None:
 
 # ── 온보딩 ────────────────────────────────────────────────────
 
-async def _cmd_start(update, context) -> int:
+async def _cmd_start(update, _context) -> int:
     """/start — 최초 사용자는 온보딩, 기존 사용자는 도움말."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import ConversationHandler
@@ -700,6 +764,36 @@ async def _cmd_memos(update, context) -> None:
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def _cmd_links(update, context) -> None:
+    """/links [코인] — 최근 트레이딩뷰 차트 링크를 보여준다."""
+    coin = context.args[0].upper() if context.args else None
+    links = _get_tradingview_links(coin)
+
+    if not links:
+        coin_str = f" ({coin})" if coin else ""
+        await update.message.reply_text(f"저장된 트레이딩뷰 링크가 없습니다{coin_str}.")
+        return
+
+    tf_label = {"MONTHLY": "월봉", "WEEKLY": "주봉", "DAILY": "일봉", "HOURLY": "시간봉"}
+    lines = [f"📊 *트레이딩뷰 차트 링크{' — ' + coin if coin else ''}*\n"]
+    seen = set()
+    for lk in links:
+        if lk["url"] in seen:
+            continue
+        seen.add(lk["url"])
+        coin_str = lk["coin"] or "?"
+        tf_str   = tf_label.get(lk["timeframe"] or "", lk["timeframe"] or "")
+        date_str = lk["published_at"].strftime("%m/%d") if lk["published_at"] else ""
+        label = f"{coin_str} {tf_str} ({date_str})".strip()
+        lines.append(f"[{label}]({lk['url']})")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+
+
 async def _cmd_mode(update, _context) -> None:
     """/mode — 매매 모드를 인라인 버튼으로 선택한다."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -947,6 +1041,8 @@ def _format_scenario(s: dict) -> str:
         lines.append(f"손절: `${s['stop_loss_price']:,.0f}`")
     if s["take_profit_price"]:
         lines.append(f"목표가: `${s['take_profit_price']:,.0f}`")
+    if s.get("hold_status"):
+        lines.append(f"\n⚠️ *현재 상태*: {s['hold_status']}")
     if s.get("summary"):
         lines.append(f"\n*요약*\n{s['summary']}")
     if s.get("invalidation"):
@@ -978,10 +1074,18 @@ def _fetch_chat_context_sync() -> str:
             scenarios = cur.fetchall()
 
             cur.execute("""
-                SELECT symbol, side, price, status, created_at
-                FROM trades ORDER BY created_at DESC LIMIT 3
+                SELECT symbol, side, price, status
+                FROM trades ORDER BY id DESC LIMIT 3
             """)
             trades = cur.fetchall()
+
+            cur.execute("""
+                SELECT indicator, state, key_level, implication, created_at
+                FROM market_context
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+                ORDER BY created_at DESC LIMIT 5
+            """)
+            market_rows = cur.fetchall()
     finally:
         conn.close()
 
@@ -1010,8 +1114,24 @@ def _fetch_chat_context_sync() -> str:
 
     if trades:
         lines.append("\n[최근 거래]")
-        for symbol, side, price, status, _ in trades:
+        for symbol, side, price, status in trades:
             lines.append(f"• {symbol} {side} @ {fmt(price)} ({status})")
+
+    if market_rows:
+        lines.append("\n[최근 시장 지표]")
+        indicator_labels = {"TETHER_D": "테더.D", "BTC_D": "BTC 도미넌스"}
+        state_labels = {
+            "BEARISH": "약세", "BULLISH": "강세", "NEUTRAL": "중립",
+            "WARNING": "경고", "RISING": "상승", "FALLING": "하락",
+        }
+        for indicator, state, key_level, implication, _ in market_rows:
+            label = indicator_labels.get(indicator, indicator)
+            state_str = state_labels.get(state, state or "-")
+            lines.append(f"• {label}: {state_str}")
+            if key_level:
+                lines.append(f"  구간: {key_level}")
+            if implication:
+                lines.append(f"  영향: {implication}")
 
     return "\n".join(lines)
 
@@ -1087,6 +1207,7 @@ def run_bot() -> None:
     app.add_handler(onboarding)
     app.add_handler(CommandHandler("coins",    _cmd_coins))
     app.add_handler(CommandHandler("scenario", _cmd_scenario))
+    app.add_handler(CommandHandler("links",    _cmd_links))
     app.add_handler(CommandHandler("memo",     _cmd_memo))
     app.add_handler(CommandHandler("memos",    _cmd_memos))
     app.add_handler(CommandHandler("mode",     _cmd_mode))
