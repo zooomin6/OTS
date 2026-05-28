@@ -124,16 +124,21 @@ class BybitClient:
     # ── 내부 헬퍼 ─────────────────────────────────────────────
 
     def _set_leverage(self, symbol: str, leverage: int) -> None:
-        """레버리지를 설정한다. 이미 같은 값이면 Bybit이 에러를 반환하므로 무시한다."""
+        """레버리지를 설정한다. 이미 같은 값이면 Bybit이 110043을 반환하므로 무시한다."""
         try:
-            self._session.set_leverage(
+            resp = self._session.set_leverage(
                 category="linear",
                 symbol=symbol,
                 buyLeverage=str(leverage),
                 sellLeverage=str(leverage),
             )
-        except Exception:
-            pass  # 동일 레버리지 재설정 시 Bybit이 에러 반환 — 무시
+            ret = resp.get("retCode", 0)
+            if ret not in (0, 110043):
+                raise RuntimeError(f"레버리지 설정 실패 ({symbol}): {resp.get('retMsg')}")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"레버리지 설정 중 오류 ({symbol}): {e}") from e
 
     @staticmethod
     def _raise_if_error(resp: dict) -> None:

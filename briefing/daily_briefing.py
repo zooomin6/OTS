@@ -234,8 +234,10 @@ async def generate_briefing() -> str:
     coins        = list({p["coin"] for p in positions})
     current_prices = await _fetch_current_prices(coins) if coins else {}
 
-    # KST 현재 시각
-    kst_now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # KST 현재 시각 (Docker 컨테이너 기본 UTC이므로 명시적 변환)
+    from datetime import timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    kst_now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
     lines = [f"📋 *OTS 일일 브리핑 — {kst_now} KST*\n"]
 
