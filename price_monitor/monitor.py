@@ -107,14 +107,22 @@ def _get_user_entry_type() -> str:
     return "ENTRY_2"
 
 
+_ENTRY_TIERS = ["ENTRY_1", "ENTRY_2", "ENTRY_3", "ENTRY_4"]
+
+
 def _load_pending_alerts() -> list[dict]:
     """사용자 성향에 맞는 ENTRY 타입 + 손절/목표 PENDING 알림을 로드한다."""
     entry_type = _get_user_entry_type()
     print(f"[monitor] 진입 성향: {ENTRY_LABEL.get(entry_type, entry_type)}")
+
+    tier_idx = _ENTRY_TIERS.index(entry_type) if entry_type in _ENTRY_TIERS else 0
+    monitored_entries = _ENTRY_TIERS[tier_idx:]
+    placeholders = ",".join(["%s"] * len(monitored_entries))
+
     conn = _db_connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT pa.id, pa.analysis_id, pa.coin_symbol,
                        pa.target_price, pa.alert_type, a.signal_type
                 FROM price_alerts pa
@@ -123,9 +131,9 @@ def _load_pending_alerts() -> list[dict]:
                   AND a.is_active = TRUE
                   AND (
                       pa.alert_type NOT LIKE 'ENTRY_%%'
-                      OR pa.alert_type = %s
+                      OR pa.alert_type IN ({placeholders})
                   )
-            """, (entry_type,))
+            """, monitored_entries)
             return [
                 {
                     "id":           row[0],
@@ -150,7 +158,7 @@ def _fetch_analysis_context(analysis_id: int) -> dict:
                 SELECT signal_type, coin_symbol, timeframe,
                        entry_price_1, entry_price_2, entry_price_3,
                        stop_loss_price, absolute_stop,
-                       take_profit_price, take_profit_price,
+                       take_profit_price, take_profit_price_2,
                        summary, invalidation,
                        youtuber_zone_low, youtuber_zone_high,
                        risk_reward_ratio
@@ -160,20 +168,21 @@ def _fetch_analysis_context(analysis_id: int) -> dict:
             if not row:
                 return {}
             return {
-                "signal_type":       row[0],
-                "coin_symbol":       row[1],
-                "timeframe":         row[2],
-                "entry_price_1":     float(row[3]) if row[3] else None,
-                "entry_price_2":     float(row[4]) if row[4] else None,
-                "entry_price_3":     float(row[5]) if row[5] else None,
-                "stop_loss_price":   float(row[6]) if row[6] else None,
-                "absolute_stop":     float(row[7]) if row[7] else None,
-                "take_profit_price": float(row[8]) if row[8] else None,
-                "summary":           row[10],
-                "invalidation":      row[11],
-                "zone_low":          float(row[12]) if row[12] else None,
-                "zone_high":         float(row[13]) if row[13] else None,
-                "rr_ratio":          float(row[14]) if row[14] else None,
+                "signal_type":         row[0],
+                "coin_symbol":         row[1],
+                "timeframe":           row[2],
+                "entry_price_1":       float(row[3]) if row[3] else None,
+                "entry_price_2":       float(row[4]) if row[4] else None,
+                "entry_price_3":       float(row[5]) if row[5] else None,
+                "stop_loss_price":     float(row[6]) if row[6] else None,
+                "absolute_stop":       float(row[7]) if row[7] else None,
+                "take_profit_price":   float(row[8]) if row[8] else None,
+                "take_profit_price_2": float(row[9]) if row[9] else None,
+                "summary":             row[10],
+                "invalidation":        row[11],
+                "zone_low":            float(row[12]) if row[12] else None,
+                "zone_high":           float(row[13]) if row[13] else None,
+                "rr_ratio":            float(row[14]) if row[14] else None,
             }
     finally:
         conn.close()
@@ -380,6 +389,9 @@ def _build_exit_message(alert: dict, current_price: float, ctx: dict) -> str:
         f"현재가:  `{_fmt_price(current_price, coin)}`",
         f"목표가:  `{_fmt_price(alert['target_price'], coin)}`",
     ]
+
+    if atype == "TAKE_PROFIT" and ctx.get("take_profit_price_2"):
+        lines.append(f"2차 목표: `{_fmt_price(ctx['take_profit_price_2'], coin)}`")
 
     if tf:
         lines.append(f"기준봉:  `{tf}`")

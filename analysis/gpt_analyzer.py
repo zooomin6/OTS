@@ -42,9 +42,6 @@ SYSTEM_PROMPT = """\
       "entry_price_2": 중립형 진입가 (숫자) | null,
       "entry_price_3": 공격형 진입가 (숫자) | null,
       "entry_price_4": 초공격형 진입가 — 마지막 매수/매도 (숫자) | null,
-      "entry_ratio_1": null,
-      "entry_ratio_2": null,
-      "entry_ratio_3": null,
       "absolute_stop": 마지노선 — 이 아래면 시즌 종료 수준 (숫자) | null,
       "stop_loss_price": 손절가 (숫자) | null,
       "take_profit_price": 1차 목표 익절가 (숫자) | null,
@@ -454,9 +451,6 @@ def _save_analysis_sync(
     entry_price_2: float | None,
     entry_price_3: float | None,
     entry_price_4: float | None,
-    entry_ratio_1: int | None,
-    entry_ratio_2: int | None,
-    entry_ratio_3: int | None,
     absolute_stop: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
@@ -485,7 +479,6 @@ def _save_analysis_sync(
                     timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
-                    entry_ratio_1, entry_ratio_2, entry_ratio_3,
                     absolute_stop, stop_loss_price, take_profit_price,
                     short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
@@ -497,7 +490,6 @@ def _save_analysis_sync(
                     %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
-                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s, %s,
@@ -511,7 +503,6 @@ def _save_analysis_sync(
                     timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
-                    entry_ratio_1, entry_ratio_2, entry_ratio_3,
                     absolute_stop, stop_loss_price, take_profit_price,
                     short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
@@ -564,8 +555,10 @@ def _create_price_alerts_sync(
     entry_price_1: float | None,
     entry_price_2: float | None,
     entry_price_3: float | None,
+    entry_price_4: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
+    take_profit_price_2: float | None,
 ) -> None:
     """
     분석 결과에서 추출된 가격 수치를 price_alerts 테이블에 등록한다.
@@ -573,15 +566,19 @@ def _create_price_alerts_sync(
     """
     alerts = []
     if entry_price_1:
-        alerts.append(("ENTRY_1",     entry_price_1))
+        alerts.append(("ENTRY_1",       entry_price_1))
     if entry_price_2:
-        alerts.append(("ENTRY_2",     entry_price_2))
+        alerts.append(("ENTRY_2",       entry_price_2))
     if entry_price_3:
-        alerts.append(("ENTRY_3",     entry_price_3))
+        alerts.append(("ENTRY_3",       entry_price_3))
+    if entry_price_4:
+        alerts.append(("ENTRY_4",       entry_price_4))
     if stop_loss_price:
-        alerts.append(("STOP_LOSS",   stop_loss_price))
+        alerts.append(("STOP_LOSS",     stop_loss_price))
     if take_profit_price:
-        alerts.append(("TAKE_PROFIT", take_profit_price))
+        alerts.append(("TAKE_PROFIT",   take_profit_price))
+    if take_profit_price_2:
+        alerts.append(("TAKE_PROFIT_2", take_profit_price_2))
 
     if not alerts:
         return
@@ -679,9 +676,6 @@ def _parse_analysis_item(item: dict, raw: str) -> dict:
         "entry_price_2":       item.get("entry_price_2"),
         "entry_price_3":       item.get("entry_price_3"),
         "entry_price_4":       item.get("entry_price_4"),
-        "entry_ratio_1":       item.get("entry_ratio_1"),
-        "entry_ratio_2":       item.get("entry_ratio_2"),
-        "entry_ratio_3":       item.get("entry_ratio_3"),
         "absolute_stop":       item.get("absolute_stop"),
         "stop_loss_price":     item.get("stop_loss_price"),
         "take_profit_price":   item.get("take_profit_price"),
@@ -1008,9 +1002,6 @@ async def _process(msg_value: bytes) -> None:
             result["entry_price_2"],
             result["entry_price_3"],
             result["entry_price_4"],
-            result["entry_ratio_1"],
-            result["entry_ratio_2"],
-            result["entry_ratio_3"],
             result["absolute_stop"],
             result["stop_loss_price"],
             result["take_profit_price"],
@@ -1037,8 +1028,10 @@ async def _process(msg_value: bytes) -> None:
                 result["entry_price_1"],
                 result["entry_price_2"],
                 result["entry_price_3"],
+                result["entry_price_4"],
                 result["stop_loss_price"],
                 result["take_profit_price"],
+                result["take_profit_price_2"],
             )
             await loop.run_in_executor(None, alerts_fn)
 

@@ -166,7 +166,6 @@ async def analyze(body: AnalyzeRequest, db: AsyncSession = Depends(get_db)):
             result["signal_type"], result["coin_symbol"], result["timeframe"],
             result["is_reference_only"], result["youtuber_zone_low"], result["youtuber_zone_high"],
             result["entry_price_1"], result["entry_price_2"], result["entry_price_3"], result["entry_price_4"],
-            result["entry_ratio_1"], result["entry_ratio_2"], result["entry_ratio_3"],
             result["absolute_stop"], result["stop_loss_price"], result["take_profit_price"],
             result["short_entry_price"], result["short_stop_loss"], result["risk_reward_ratio"],
             result["current_rsi"], result["rsi_signal"], result["volume_signal"], result["fib_level"],

@@ -73,7 +73,7 @@
 | status | VARCHAR(20) | `PENDING` / `FILLED` / `FAILED` / `CANCELLED` |
 | bybit_order_id | VARCHAR(100) | Bybit 주문 ID (취소 / 조회용) |
 | stop_loss_price | DECIMAL(18, 2) | 자동 손절가 (매수 즉시 등록) |
-| mode | VARCHAR(20) | `FULL_AUTO` / `SEMI_AUTO` |
+| mode | VARCHAR(20) | `AUTO` / `SEMI_AUTO` |
 | executed_at | TIMESTAMP | 주문 실행 시각 |
 
 ### settings — 시스템 설정 (항상 1행)
@@ -81,7 +81,7 @@
 | 컬럼 | 타입 | 설명 |
 | --- | --- | --- |
 | id | INT PK | 고정값 1 (다중 행 방지 CHECK 제약) |
-| mode | VARCHAR(20) | `FULL_AUTO` / `SEMI_AUTO` (기본: SEMI_AUTO) |
+| mode | VARCHAR(20) | `AUTO` / `SEMI_AUTO` (기본: SEMI_AUTO) |
 | max_trade_amount_krw | INT | 1회 최대 거래금액 (원, 기본: 100,000) |
 | daily_loss_limit_krw | INT | 일일 최대 손실 한도 (원, 기본: 300,000) |
 | stop_loss_pct | DECIMAL(5, 4) | 자동 손절 비율 (기본: 0.03 = 3%) |
@@ -233,7 +233,7 @@ erDiagram
 
 | 항목 | 상태 |
 | --- | --- |
-| settings.mode | FULL_AUTO |
+| settings.mode | AUTO |
 | 게시글 감지 시 | 사용자 확인 없이 즉시 리스크 체크 → 자동 주문 |
 | 실행 후 | 텔레그램으로 실행 결과 알림만 발송 |
 | is_halted = TRUE | Full-auto 상태에서도 주문 전면 차단 |

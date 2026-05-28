@@ -109,7 +109,7 @@ def _get_open_position(coin_symbol: str, signal_type: str) -> dict | None:
             cur.execute("""
                 SELECT id, avg_entry_price, initial_capital_usdt, leverage,
                        current_qty, current_stop_loss, current_take_profit_1,
-                       tp1_executed, add_buy_count, bybit_position_idx
+                       tp1_executed, tp2_executed, add_buy_count, bybit_position_idx
                 FROM positions
                 WHERE coin_symbol = %s AND side = %s AND status = 'OPEN'
                 LIMIT 1
@@ -126,8 +126,9 @@ def _get_open_position(coin_symbol: str, signal_type: str) -> dict | None:
                 "current_stop_loss":     float(row[5]) if row[5] else None,
                 "current_take_profit_1": float(row[6]) if row[6] else None,
                 "tp1_executed":          row[7],
-                "add_buy_count":         row[8],
-                "bybit_position_idx":    row[9],
+                "tp2_executed":          row[8],
+                "add_buy_count":         row[9],
+                "bybit_position_idx":    row[10],
             }
     finally:
         conn.close()
@@ -223,6 +224,23 @@ def _update_tp1_executed(position_id: int, remaining_qty: float) -> None:
                     current_qty  = %s
                 WHERE id = %s
             """, (remaining_qty, position_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _update_tp2_executed(position_id: int) -> None:
+    """2차 익절 완료 후 tp2_executed 플래그 및 포지션 상태를 갱신한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE positions
+                SET tp2_executed = TRUE,
+                    status       = 'CLOSED',
+                    closed_at    = NOW()
+                WHERE id = %s
+            """, (position_id,))
         conn.commit()
     finally:
         conn.close()
@@ -336,6 +354,11 @@ async def _handle_take_profit_1(alert: dict, existing: dict, mode: str) -> None:
         _mark_alert_processed(alert["id"])
         return
 
+    if existing["bybit_position_idx"] is None:
+        await _send_telegram(f"❌ *TP1 처리 불가 — {alert['coin_symbol']}*\nbybit_position_idx 없음. 수동 확인 필요.")
+        _mark_alert_processed(alert["id"])
+        return
+
     coin      = alert["coin_symbol"]
     signal    = alert["signal_type"]
     price     = alert["target_price"]
@@ -373,6 +396,58 @@ async def _handle_take_profit_1(alert: dict, existing: dict, mode: str) -> None:
         f"가격: `${price:,.2f}`\n"
         f"청산 수량: `{half_qty}` (50%)\n"
         f"잔여 수량: `{remaining}`"
+    )
+
+
+async def _handle_take_profit_2(alert: dict, existing: dict, mode: str) -> None:
+    """TP2 도달 시 잔여 포지션 전량을 청산한다."""
+    from trading.bybit_client import BybitClient
+
+    if existing["tp2_executed"]:
+        _mark_alert_processed(alert["id"])
+        return
+
+    if existing["bybit_position_idx"] is None:
+        await _send_telegram(f"❌ *TP2 처리 불가 — {alert['coin_symbol']}*\nbybit_position_idx 없음. 수동 확인 필요.")
+        _mark_alert_processed(alert["id"])
+        return
+
+    coin       = alert["coin_symbol"]
+    signal     = alert["signal_type"]
+    price      = alert["target_price"]
+    qty        = round(existing["current_qty"], 3)
+    close_side = "Sell" if signal == "BUY" else "Buy"
+
+    try:
+        client = BybitClient()
+        order  = client.place_order(
+            symbol=f"{coin}USDT",
+            side=close_side,
+            qty=qty,
+            price=price,
+            leverage=existing["leverage"],
+            position_idx=existing["bybit_position_idx"],
+        )
+        order_id = order.get("orderId")
+    except Exception as e:
+        await _send_telegram(f"❌ *TP2 청산 실패 — {coin}*\n{e}")
+        _mark_alert_processed(alert["id"])
+        return
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _update_tp2_executed, existing["id"])
+    await loop.run_in_executor(
+        None, _insert_trade,
+        alert["analysis_id"], existing["id"], f"{coin}USDT", close_side.upper(),
+        qty, price, None, mode, order_id,
+    )
+
+    _mark_alert_processed(alert["id"])
+    await _send_telegram(
+        f"🏆 *{coin} 2차 익절 체결*\n\n"
+        f"가격: `${price:,.2f}`\n"
+        f"청산 수량: `{qty}` (전량)\n"
+        f"포지션 종료"
     )
 
 
@@ -424,22 +499,31 @@ async def _execute_alert(alert: dict, mode: str) -> None:
             _mark_alert_processed(alert["id"])
         return
 
+    # TAKE_PROFIT_2 — 2차 익절 처리 (잔여 전량 청산)
+    if alert_type == "TAKE_PROFIT_2":
+        if existing:
+            await _handle_take_profit_2(alert, existing, mode)
+        else:
+            _mark_alert_processed(alert["id"])
+        return
+
     # 기존 포지션 있고 ENTRY 타입 아님 → TP/SL만 업데이트
     if existing and not alert_type.startswith("ENTRY_"):
         await loop.run_in_executor(
             None, _update_position_tp_sl_only,
             existing["id"], alert["stop_loss_price"], alert["take_profit"],
         )
-        try:
-            client = BybitClient()
-            client.set_tp_sl(
-                symbol=f"{coin}USDT",
-                position_idx=existing["bybit_position_idx"],
-                take_profit=alert["take_profit"],
-                stop_loss=alert["stop_loss_price"],
-            )
-        except Exception as e:
-            print(f"[executor] TP/SL 업데이트 실패: {e}")
+        if existing["bybit_position_idx"] is not None:
+            try:
+                client = BybitClient()
+                client.set_tp_sl(
+                    symbol=f"{coin}USDT",
+                    position_idx=existing["bybit_position_idx"],
+                    take_profit=alert["take_profit"],
+                    stop_loss=alert["stop_loss_price"],
+                )
+            except Exception as e:
+                print(f"[executor] TP/SL 업데이트 실패: {e}")
         _mark_alert_processed(alert["id"])
         return
 

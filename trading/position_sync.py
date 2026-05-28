@@ -219,7 +219,7 @@ async def sync_analysis(analysis_id: int) -> None:
             if ratio == 0:
                 continue
             usdt_for_entry = usdt_alloc * ratio
-            qty = round((usdt_for_entry * leverage) / price, 4)
+            qty = round((usdt_for_entry * leverage) / price, 3)
             if qty <= 0:
                 continue
             try:
