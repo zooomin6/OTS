@@ -92,6 +92,8 @@ class Analysis(Base):
     summary            : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
     invalidation       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
     raw_response       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    feedback           : Mapped[Optional[str]]     = mapped_column(String(20), nullable=True)
+    feedback_note      : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
     is_active          : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
     expires_at         : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
     created_at         : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))

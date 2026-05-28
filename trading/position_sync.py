@@ -129,7 +129,7 @@ def _save_trade(
                     side,
                     qty,
                     price,
-                    "PENDING" if bybit_order_id else "PENDING",
+                    "FILLED" if bybit_order_id else "PENDING",
                     bybit_order_id,
                     stop_loss,
                     mode,

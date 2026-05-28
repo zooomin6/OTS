@@ -112,7 +112,10 @@ class BybitClient:
             coin="USDT",
         )
         self._raise_if_error(resp)
-        coins = resp["result"]["list"][0]["coin"]
+        result_list = resp["result"]["list"]
+        if not result_list:
+            return 0.0
+        coins = result_list[0]["coin"]
         for c in coins:
             if c["coin"] == "USDT":
                 return float(c["availableToWithdraw"])

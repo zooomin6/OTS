@@ -911,7 +911,7 @@ async def _callback_feedback(update, context) -> None:
         _save_feedback(analysis_id, "CORRECT", None)
         await query.edit_message_reply_markup(
             reply_markup=InlineKeyboardMarkup([[
-                {"text": "✅ 검증 완료", "callback_data": "fb:done"}
+                InlineKeyboardButton("✅ 검증 완료", callback_data="fb:done")
             ]])
         )
 

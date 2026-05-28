@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS analyses (
     summary             TEXT,
     invalidation        TEXT,
     raw_response        TEXT,
+    feedback            VARCHAR(20),
+    feedback_note       TEXT,
     is_active           BOOLEAN        NOT NULL DEFAULT TRUE,
     expires_at          TIMESTAMP,                -- DAILY=+5일, HOURLY=+24h, MONTHLY/WEEKLY=NULL
     created_at          TIMESTAMP      NOT NULL DEFAULT NOW()
