@@ -61,8 +61,11 @@ def _get_user_leverage(coin_symbol: str) -> int:
             )
             row = cur.fetchone()
             if row and row[0]:
-                cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
-                return int(cfg.get(coin_symbol, cfg.get("default", 1)))
+                try:
+                    cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+                    return int(cfg.get(coin_symbol, cfg.get("default", 1)))
+                except (ValueError, TypeError):
+                    return 1
             return 1
     finally:
         conn.close()

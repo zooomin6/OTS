@@ -75,9 +75,9 @@ class Analysis(Base):
     entry_price_2      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 중립형
     entry_price_3      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 공격형
     entry_price_4      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 초공격형
-    entry_ratio_1      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
-    entry_ratio_2      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
-    entry_ratio_3      : Mapped[Optional[int]]     = mapped_column(Integer, nullable=True)
+    entry_ratio_1      : Mapped[Optional[int]]     = mapped_column(SmallInteger, nullable=True)
+    entry_ratio_2      : Mapped[Optional[int]]     = mapped_column(SmallInteger, nullable=True)
+    entry_ratio_3      : Mapped[Optional[int]]     = mapped_column(SmallInteger, nullable=True)
     absolute_stop      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 마지노선
     stop_loss_price    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     take_profit_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
@@ -200,6 +200,7 @@ class UserProfile(Base):
     risk_tolerance       : Mapped[str]          = mapped_column(String(20), nullable=False, server_default=text("'MODERATE'"))
     total_asset_krw      : Mapped[Optional[int]]= mapped_column(BigInteger, nullable=True)
     leverage             : Mapped[int]          = mapped_column(Integer, nullable=False, server_default=text("1"))
+    leverage_config      : Mapped[Any]          = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     trading_mode         : Mapped[str]          = mapped_column(String(20), nullable=False, server_default=text("'SEMI_AUTO'"))
     auto_ratio           : Mapped[int]          = mapped_column(Integer, nullable=False, server_default=text("50"))
     preferred_coins      : Mapped[Any]          = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
