@@ -69,11 +69,8 @@ def _get_user_leverage(coin_symbol: str) -> int:
 
 
 def _get_usdt_balance_for_coin(coin_symbol: str) -> float:
-    """
-    사용자 총 자산에서 해당 코인 배분 비율 계산.
-    COIN_ALLOCATION: BTC 100% (소액 운용 — 단일 코인 집중)
-    """
-    COIN_ALLOCATION = {"BTC": 1.0}
+    """사용자 총 자산에서 해당 코인 배분 비율 계산 (trade_executor와 동일 기준)."""
+    COIN_ALLOCATION = {"BTC": 0.50, "ETH": 0.50}
     ratio = COIN_ALLOCATION.get(coin_symbol, 0.0)
 
     conn = _db_connect()

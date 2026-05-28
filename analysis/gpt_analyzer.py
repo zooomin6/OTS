@@ -542,7 +542,7 @@ def _save_market_context_sync(post_db_id: int, indicators: dict) -> None:
                     VALUES (%s, 'TETHER_D', %s, %s, %s, %s)
                     """,
                     (post_db_id, tether.get("state"), tether.get("key_level"),
-                     tether.get("implication"), tether.get("key_level")),
+                     tether.get("implication"), tether.get("summary")),
                 )
             btc_d = indicators.get("btc_dominance") or {}
             if btc_d.get("state"):
