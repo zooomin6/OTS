@@ -363,7 +363,7 @@ async def _handle_take_profit_1(alert: dict, existing: dict, mode: str) -> None:
     await loop.run_in_executor(None, _update_tp1_executed, existing["id"], remaining)
     await loop.run_in_executor(
         None, _insert_trade,
-        alert["analysis_id"], existing["id"], f"{coin}USDT", close_side,
+        alert["analysis_id"], existing["id"], f"{coin}USDT", close_side.upper(),
         half_qty, price, None, mode, order_id,
     )
 
@@ -464,7 +464,7 @@ async def _execute_alert(alert: dict, mode: str) -> None:
 
     # 리스크 체크
     rm     = RiskManager()
-    result = rm.check(trade_krw, is_new_position=not is_add_buy)
+    result = rm.check(trade_krw, is_new_position=not is_add_buy, signal_type=signal)
     if not result:
         await _send_telegram(f"⚠️ *리스크 체크 실패 — {coin}*\n{result.reason}")
         _mark_alert_processed(alert["id"])
@@ -519,7 +519,7 @@ async def _execute_alert(alert: dict, mode: str) -> None:
 
     await loop.run_in_executor(
         None, _insert_trade,
-        analysis_id, pos_id, f"{coin}USDT", side,
+        analysis_id, pos_id, f"{coin}USDT", side.upper(),
         qty, price, alert["stop_loss_price"], mode, order_id,
     )
     _mark_alert_processed(alert["id"])

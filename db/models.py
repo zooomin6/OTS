@@ -265,6 +265,23 @@ class Position(Base):
     trades: Mapped[list[Trade]] = relationship("Trade", back_populates="position")
 
 
+class MarketContext(Base):
+    __tablename__ = "market_context"
+    __table_args__ = (
+        Index("idx_market_context_post_id", "post_id"),
+        Index("idx_market_context_created_at", "created_at"),
+    )
+
+    id         : Mapped[int]           = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    post_id    : Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("posts.id", ondelete="CASCADE"), nullable=True)
+    indicator  : Mapped[str]           = mapped_column(String(20), nullable=False)
+    state      : Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    key_level  : Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    implication: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    summary    : Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at : Mapped[datetime]      = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+
+
 class EconomicCalendar(Base):
     __tablename__ = "economic_calendars"
     __table_args__ = (

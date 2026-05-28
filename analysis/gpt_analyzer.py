@@ -727,25 +727,41 @@ async def _analyze_with_gpt(
     else:
         user_content = full_content  # type: ignore[assignment]
 
-    from openai import APIStatusError
-    try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_content},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-    except APIStatusError as e:
-        if e.status_code == 429 and "insufficient_quota" in str(e):
-            await _send_telegram_text(
-                "⚠️ *OpenAI 크레딧 소진*\n\n"
-                "API 할당량이 초과되었습니다. 분석이 중단됩니다.\n"
-                "platform.openai.com → Billing 에서 크레딧을 충전해 주세요."
+    from openai import APIStatusError, APIConnectionError, APITimeoutError
+
+    _RETRY_DELAYS = [5, 15, 30]
+    response = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_content},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
             )
-        raise
+            break
+        except APIStatusError as e:
+            if e.status_code == 429 and "insufficient_quota" in str(e):
+                await _send_telegram_text(
+                    "⚠️ *OpenAI 크레딧 소진*\n\n"
+                    "API 할당량이 초과되었습니다. 분석이 중단됩니다.\n"
+                    "platform.openai.com → Billing 에서 크레딧을 충전해 주세요."
+                )
+                raise
+            if attempt >= len(_RETRY_DELAYS):
+                raise
+            wait = _RETRY_DELAYS[attempt]
+            print(f"[analyzer] GPT API 에러 (status={e.status_code}), {wait}초 후 재시도 ({attempt + 1}/{len(_RETRY_DELAYS)})")
+            await asyncio.sleep(wait)
+        except (APIConnectionError, APITimeoutError) as e:
+            if attempt >= len(_RETRY_DELAYS):
+                raise
+            wait = _RETRY_DELAYS[attempt]
+            print(f"[analyzer] GPT 연결 실패 ({type(e).__name__}), {wait}초 후 재시도 ({attempt + 1}/{len(_RETRY_DELAYS)})")
+            await asyncio.sleep(wait)
     raw = response.choices[0].message.content
     if not raw:
         raise ValueError(f"GPT 빈 응답 (finish_reason={response.choices[0].finish_reason})")

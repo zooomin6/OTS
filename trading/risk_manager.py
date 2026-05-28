@@ -55,11 +55,15 @@ def _get_settings() -> dict:
         conn.close()
 
 
-def _get_open_position_count() -> int:
+def _get_open_position_count(side: str) -> int:
+    """같은 방향(LONG/SHORT) 오픈 포지션 수를 반환한다."""
     conn = _db_connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'")
+            cur.execute(
+                "SELECT COUNT(*) FROM positions WHERE status = 'OPEN' AND side = %s",
+                (side,),
+            )
             return cur.fetchone()[0]
     finally:
         conn.close()
@@ -120,13 +124,14 @@ class RiskCheckResult:
 
 class RiskManager:
 
-    def check(self, trade_amount_krw: int, is_new_position: bool = True) -> RiskCheckResult:
+    def check(self, trade_amount_krw: int, is_new_position: bool = True, signal_type: str = "BUY") -> RiskCheckResult:
         """
         주문 실행 전 리스크 체크를 수행한다.
 
         Args:
             trade_amount_krw:  이번 주문 금액 (원화 환산)
             is_new_position:   신규 진입 여부 (추가매수는 False)
+            signal_type:       'BUY' 또는 'SELL' (방향별 포지션 수 체크에 사용)
 
         Returns:
             RiskCheckResult — passed=True면 주문 가능
@@ -137,13 +142,14 @@ class RiskManager:
         if settings["is_halted"]:
             return RiskCheckResult(False, "시스템이 정지 상태입니다. /status 확인 후 재개하세요.")
 
-        # 2. 최대 동시 포지션 수 (신규 진입만 체크)
+        # 2. 최대 동시 포지션 수 (신규 진입만, 같은 방향 기준)
         if is_new_position:
-            open_count = _get_open_position_count()
+            side = "LONG" if signal_type == "BUY" else "SHORT"
+            open_count = _get_open_position_count(side)
             if open_count >= MAX_OPEN_POSITIONS:
                 return RiskCheckResult(
                     False,
-                    f"최대 포지션 수 초과 ({open_count}/{MAX_OPEN_POSITIONS}). 기존 포지션 정리 후 재시도하세요."
+                    f"{side} 최대 포지션 수 초과 ({open_count}/{MAX_OPEN_POSITIONS}). 기존 포지션 정리 후 재시도하세요."
                 )
 
         # 3. 1회 거래 한도

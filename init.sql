@@ -283,3 +283,20 @@ CREATE TABLE IF NOT EXISTS economic_calendars (
 
 CREATE INDEX IF NOT EXISTS idx_econ_cal_event_date ON economic_calendars (event_date);
 CREATE INDEX IF NOT EXISTS idx_econ_cal_importance ON economic_calendars (importance) WHERE importance = 'HIGH';
+
+-- -----------------------------------------
+-- 13. market_context — 시장 지표 (테더.D, BTC 도미넌스)
+-- -----------------------------------------
+CREATE TABLE IF NOT EXISTS market_context (
+    id          BIGSERIAL    PRIMARY KEY,
+    post_id     BIGINT       REFERENCES posts (id) ON DELETE CASCADE,
+    indicator   VARCHAR(20)  NOT NULL,
+    state       VARCHAR(50),
+    key_level   TEXT,
+    implication TEXT,
+    summary     TEXT,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_context_post_id    ON market_context (post_id);
+CREATE INDEX IF NOT EXISTS idx_market_context_created_at ON market_context (created_at DESC);
