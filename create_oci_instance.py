@@ -4,8 +4,12 @@
 import oci
 import time
 import sys
+import urllib.request
+import json
 
 OCI_CONFIG_FILE  = r"C:\Users\sotus\.oci\config"
+TELEGRAM_BOT_TOKEN = "8897005342:AAHnzvH4NhOoCenQHXerJGGHjgqmbyQoDDo"
+TELEGRAM_CHAT_ID   = "8145739296"
 COMPARTMENT_ID   = "ocid1.tenancy.oc1..aaaaaaaaotmasgjymixa7bnezxjel5oocbjg473i3yh6yvvmj3fgbb5htvjq"
 SUBNET_ID        = "ocid1.subnet.oc1.ap-chuncheon-1.aaaaaaaafbk7c6rdytg4q5yqlczpr4ug2gop6fzkcuwqmtczs5wy7pa22m4q"
 SSH_KEY_FILE     = r"C:\Users\sotus\.ssh\ots_oracle.pub"
@@ -15,6 +19,16 @@ OCPUS            = 4
 MEMORY_GB        = 24
 BOOT_VOLUME_GB   = 100
 RETRY_INTERVAL   = 10  # seconds between retries
+
+
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "text": text}).encode()
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"  (텔레그램 알림 실패: {e})")
 
 
 def get_availability_domains(identity_client):
@@ -109,6 +123,12 @@ def main():
             print(f"  Name        : {instance.display_name}")
             print(f"  State       : {instance.lifecycle_state}")
             print("\nPublic IP will appear in OCI Console > Compute > Instances in ~2 min.")
+            send_telegram(
+                f"✅ OCI 인스턴스 생성 성공!\n"
+                f"Name: {instance.display_name}\n"
+                f"ID: {instance.id}\n"
+                f"2분 후 OCI 콘솔에서 Public IP 확인하세요."
+            )
             break
 
         except oci.exceptions.ServiceError as e:

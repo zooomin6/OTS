@@ -129,6 +129,9 @@ SYSTEM_PROMPT = """\
 ### 7. R:R 비율 계산
 - risk_reward_ratio = (take_profit_price - entry_price_2) / (entry_price_2 - stop_loss_price)
 - entry_price_2 기준 (중립형 기준값). 계산 불가능하면 null.
+- **최소 목표가 거리 규칙**: take_profit_price는 entry_price_2 대비 최소 1.0% 이상 떨어져야 합니다.
+  왕복 수수료(~0.11%) + 슬리피지를 고려하면 1% 미만 목표는 수익이 나지 않습니다.
+  유튜버가 제시한 목표가가 1% 미만이면 nearest 저항선을 찾아 조정하거나 take_profit_price = null로 두세요.
 
 ### 8. 기술적 지표
 - current_rsi: 유튜버가 텍스트에서 언급한 RSI 수치 (예: "rsi 43.37" → 43.37).
@@ -168,6 +171,12 @@ SYSTEM_PROMPT = """\
 - "이번 주", "주간" → WEEKLY
 - "이번 달", "월간" → MONTHLY
 
+### 12. 유튜브 영상 썸네일 처리 (중요)
+- 이미지가 유튜브 영상 썸네일인 경우(재생 버튼▶이 보이거나, 영상 제목 텍스트가 오버레이된 경우, 유튜브 UI 요소가 보이는 경우) **차트가 아니므로 분석하지 마세요.**
+- 이 경우 signal_type을 반드시 **"SKIP"** 으로 설정하고, summary에 "영상 게시물 — 차트 분석 불가"라고 기입하세요.
+- 나머지 필드는 모두 null로 두세요.
+- analyses 배열에 SKIP 항목 하나만 반환하면 됩니다.
+
 ### 11. 코인 심볼 추론 (반드시 적용 — null 반환 최소화)
 
 코인 이름이 명시되지 않아도 **가격 범위**로 반드시 추론하세요.
@@ -183,13 +192,21 @@ SYSTEM_PROMPT = """\
 | 0.5 ~ 30 | LINK / AVAX / MATIC 등 중형 알트 |
 | 0.001 ~ 0.1 | PEPE / WIF 등 밈코인 |
 
+**도미넌스 지표 심볼 규칙 (반드시 적용)**:
+- "테더.D", "테더도미넌스", "USDT.D", "usdt.d" 언급 → coin_symbol = "USDT.D"
+- USDT.D 가격은 % 단위 (보통 4~8 사이). 게시글에 숫자가 나오면 youtuber_zone_low/high에 반드시 기입.
+- "비트 도미넌스", "BTC.D" 언급 → coin_symbol = "BTC.D"
+- "ETH/BTC" 차트 → coin_symbol = "ETH/BTC"
+- 도미넌스/비율 지표는 timeframe을 차트 기준으로 추출 (주봉→WEEKLY, 4시간→HOURLY 등)
+
 **추론 우선순위**:
 1. 텍스트에 코인명 직접 언급 → 그대로 사용
-2. entry_price 또는 stop_loss_price 범위 → 위 표 적용
-3. absolute_stop 범위 → 위 표 적용 (entry 없을 때 fallback)
-4. "비트/비트코인" → BTC, "이더/이더리움" → ETH
-5. 이 채널은 ETH를 가장 많이 다룸 → 코인 미언급 + 가격 1500~5000 범위면 ETH 확정
-6. 알트코인 게시글이나 가격 범위 불명확 시에만 null 허용
+2. 도미넌스 지표 언급 → 위 도미넌스 규칙 적용
+3. entry_price 또는 stop_loss_price 범위 → 위 표 적용
+4. absolute_stop 범위 → 위 표 적용 (entry 없을 때 fallback)
+5. "비트/비트코인" → BTC, "이더/이더리움" → ETH
+6. 이 채널은 ETH를 가장 많이 다룸 → 코인 미언급 + 가격 1500~5000 범위면 ETH 확정
+7. 알트코인 게시글이나 가격 범위 불명확 시에만 null 허용
 
 **예시**:
 - "2050 아래에서 추가 매수" → 가격 2050 = ETH 범위 → coin_symbol = "ETH"
@@ -377,6 +394,43 @@ def _fetch_post_sync(post_db_id: int) -> dict | None:
             }
     finally:
         conn.close()
+
+
+def _fetch_tv_links_sync(post_id: int) -> list[str]:
+    """해당 게시물의 TradingView 링크 목록 반환."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT url FROM post_links WHERE post_id = %s AND link_type = 'tradingview' LIMIT 3",
+                (post_id,),
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _screenshot_tv_sync(url: str) -> str | None:
+    """Selenium Remote로 TradingView 차트 스크린샷 → data URI 반환."""
+    import time
+    try:
+        from selenium import webdriver
+        options = webdriver.ChromeOptions()
+        options.add_argument("--window-size=1920,1080")
+        driver = webdriver.Remote(
+            command_executor="http://selenium:4444/wd/hub",
+            options=options,
+        )
+        try:
+            driver.get(url)
+            time.sleep(7)  # 차트 렌더링 대기
+            b64 = driver.get_screenshot_as_base64()
+            return f"data:image/png;base64,{b64}"
+        finally:
+            driver.quit()
+    except Exception as e:
+        print(f"[analyzer] TradingView 스크린샷 실패 ({url}): {e}")
+        return None
 
 
 def _calc_expires_at(timeframe: str | None) -> str | None:
@@ -584,7 +638,7 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
 
     examples = []
     for row in reversed(rows):  # 오래된 것부터 → 최신 순서로
-        content_preview, signal, coin, tf, e1, e2, e3, sl, tp, summary, feedback = row
+        content_preview, signal, coin, tf, e1, e2, e3, sl, _, summary, feedback = row
         tf_str = tf or "미확인"
         e_str = " / ".join(
             f"{v:,.0f}" for v in [e1, e2, e3] if v
@@ -665,7 +719,7 @@ async def _analyze_with_gpt(
 
     if image_urls:
         user_content: list = [{"type": "text", "text": full_content}]
-        for url in image_urls[:5]:
+        for url in image_urls[:8]:
             user_content.append({
                 "type": "image_url",
                 "image_url": {"url": url, "detail": "high"},
@@ -673,15 +727,25 @@ async def _analyze_with_gpt(
     else:
         user_content = full_content  # type: ignore[assignment]
 
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_content},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.3,
-    )
+    from openai import APIStatusError
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+    except APIStatusError as e:
+        if e.status_code == 429 and "insufficient_quota" in str(e):
+            await _send_telegram_text(
+                "⚠️ *OpenAI 크레딧 소진*\n\n"
+                "API 할당량이 초과되었습니다. 분석이 중단됩니다.\n"
+                "platform.openai.com → Billing 에서 크레딧을 충전해 주세요."
+            )
+        raise
     raw = response.choices[0].message.content
     if not raw:
         raise ValueError(f"GPT 빈 응답 (finish_reason={response.choices[0].finish_reason})")
@@ -701,6 +765,43 @@ async def _analyze_with_gpt(
 
 # ── Telegram ─────────────────────────────────────────────────
 
+def _get_user_risk_sync() -> str:
+    """DB에서 사용자 risk_tolerance를 조회한다. 기본값 MODERATE."""
+    if not TELEGRAM_CHAT_ID:
+        return "MODERATE"
+    try:
+        import psycopg2
+        from urllib.parse import urlparse
+        url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+        p = urlparse(url)
+        conn = psycopg2.connect(
+            host=p.hostname, port=p.port or 5432,
+            user=p.username, password=p.password,
+            dbname=p.path.lstrip("/"),
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT risk_tolerance FROM user_profiles WHERE telegram_user_id = %s",
+                (int(TELEGRAM_CHAT_ID),)
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else "MODERATE"
+    except Exception:
+        return "MODERATE"
+
+
+async def _send_telegram_text(text: str) -> None:
+    """단순 텍스트 메시지를 Telegram으로 전송한다."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    import httpx
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        await client.post(url, json=payload)
+
+
 async def _send_telegram(
     analysis_id: int,
     result: dict,
@@ -713,8 +814,14 @@ async def _send_telegram(
     import httpx
 
     signal_type = result["signal_type"]
-    EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}
-    emoji = EMOJI.get(signal_type, "⚪")
+    short_entry = result.get("short_entry_price")
+
+    if signal_type == "BUY":
+        direction = "🟢 롱 진입"
+    elif signal_type == "SELL":
+        direction = "🔴 숏 진입" if short_entry else "🔴 롱 청산"
+    else:
+        direction = "🟡 관망"
 
     coin      = result.get("coin_symbol") or "?"
     zone_low  = result.get("youtuber_zone_low")
@@ -722,7 +829,6 @@ async def _send_telegram(
     e1 = result.get("entry_price_1")   # 안정형
     e2 = result.get("entry_price_2")   # 중립형
     e3 = result.get("entry_price_3")   # 공격형
-    e4 = result.get("entry_price_4")   # 초공격형
     abs_stop = result.get("absolute_stop")
     sl  = result.get("stop_loss_price")
     tp  = result.get("take_profit_price")
@@ -741,7 +847,7 @@ async def _send_telegram(
     is_reference_only = result.get("is_reference_only", False)
     tf_label = {"MONTHLY": "월봉", "WEEKLY": "주봉", "DAILY": "일봉", "HOURLY": "시간봉"}.get(timeframe or "", "")
 
-    lines = [f"{emoji} *새 투자 신호 — {signal_type} ({coin})*\n"]
+    lines = [f"{direction} *새 투자 신호 — {coin}*\n"]
 
     if tf_label:
         ref = " _(참고용 — 자동매매 없음)_" if is_reference_only else ""
@@ -750,16 +856,15 @@ async def _send_telegram(
     if zone_low and zone_high:
         lines.append(f"📌 유튜버 구간: {_fmt(zone_low)} ~ {_fmt(zone_high)}\n")
 
-    # 성향별 진입가 표
-    entry_rows = [
-        ("안정형", e1), ("중립형", e2), ("공격형", e3), ("초공격형", e4),
-    ]
-    active = [(label, price) for label, price in entry_rows if price]
-    if active:
-        entry_lines = ["🎯 *성향별 진입가*"]
-        for label, price in active:
-            entry_lines.append(f"  {label}: {_fmt(price)}")
-        lines.append("\n".join(entry_lines) + "\n")
+    # 사용자 성향에 맞는 진입가 하나만 표시
+    risk_to_entry = {"CONSERVATIVE": e1, "MODERATE": e2, "AGGRESSIVE": e3}
+    risk_label    = {"CONSERVATIVE": "안정형", "MODERATE": "중립형", "AGGRESSIVE": "공격형"}
+    import asyncio
+    loop = asyncio.get_event_loop()
+    user_risk = await loop.run_in_executor(None, _get_user_risk_sync)
+    entry_val     = risk_to_entry.get(user_risk) or e1 or e2
+    if entry_val:
+        lines.append(f"🎯 진입가 ({risk_label.get(user_risk, '중립형')}): {_fmt(entry_val)}\n")
 
     if sl or tp:
         lines.append(
@@ -783,8 +888,10 @@ async def _send_telegram(
     if tech_parts:
         lines.append("📊 기술지표: " + " | ".join(tech_parts) + "\n")
 
-    lines.append(f"\n*요약*\n{result['summary']}\n")
-    lines.append(f"*무효 조건*\n{result['invalidation']}\n")
+    summary_text = result.get("summary") or "-"
+    invalid_text = result.get("invalidation") or "-"
+    lines.append(f"\n*요약*\n{summary_text}\n")
+    lines.append(f"*무효 조건*\n{invalid_text}\n")
     lines.append(f"\n원문: {content_preview[:80]}...")
     lines.append(f"\n분석 ID: \\#{analysis_id}")
 
@@ -833,7 +940,20 @@ async def _process(msg_value: bytes) -> None:
         print(f"[analyzer] 게시글 없음: id={post_db_id}")
         return
 
-    image_urls = kafka_images or post.get("image_urls", [])
+    image_urls = list(kafka_images or post.get("image_urls", []))
+
+    # TradingView 링크 스크린샷 추가
+    tv_fn = functools.partial(_fetch_tv_links_sync, post_db_id)
+    tv_links = await loop.run_in_executor(None, tv_fn)
+    if tv_links:
+        print(f"[analyzer] TradingView 링크 {len(tv_links)}개 스크린샷 시작")
+        for tv_url in tv_links:
+            ss_fn = functools.partial(_screenshot_tv_sync, tv_url)
+            b64_img = await loop.run_in_executor(None, ss_fn)
+            if b64_img:
+                image_urls.append(b64_img)
+                print(f"[analyzer] TV 스크린샷 추가 완료: {tv_url}")
+
     print(f"[analyzer] 분석 시작: post_id={post_db_id}, 이미지 {len(image_urls)}개")
 
     analyses, market_indicators = await _analyze_with_gpt(post["content"], image_urls=image_urls)
@@ -847,6 +967,17 @@ async def _process(msg_value: bytes) -> None:
     # 각 분석 항목별로 저장 + 알림
     for result in analyses:
         print(f"[analyzer] 신호: {result['signal_type']} | 코인: {result['coin_symbol']} | TF: {result['timeframe']}")
+
+        # 영상 썸네일 게시물 — DB 저장 없이 텔레그램으로 확인 요청
+        if result["signal_type"] == "SKIP":
+            skip_text = (
+                f"🎬 *영상 게시물 감지*\n"
+                f"post\\_id: {post_db_id}\n\n"
+                f"이미지가 유튜브 영상 썸네일로 판단되어 자동 분석을 건너뛰었습니다.\n"
+                f"영상 내용을 요약해서 알려주시면 수동으로 입력하겠습니다."
+            )
+            await _send_telegram_text(skip_text)
+            continue
 
         save_fn = functools.partial(
             _save_analysis_sync,

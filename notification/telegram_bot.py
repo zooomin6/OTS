@@ -20,6 +20,44 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 DATABASE_URL       = os.environ.get("DATABASE_URL", "")
 
 SIGNAL_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}
+
+RISK_TO_ENTRY_KEY = {
+    "CONSERVATIVE": "entry_price_1",
+    "MODERATE":     "entry_price_2",
+    "AGGRESSIVE":   "entry_price_3",
+}
+RISK_LABEL = {
+    "CONSERVATIVE": "안정형",
+    "MODERATE":     "중립형",
+    "AGGRESSIVE":   "공격형",
+}
+
+
+def _get_user_risk() -> str:
+    """TELEGRAM_CHAT_ID 기준으로 사용자 risk_tolerance를 반환한다. 기본값 MODERATE."""
+    if not TELEGRAM_CHAT_ID:
+        return "MODERATE"
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT risk_tolerance FROM user_profiles WHERE telegram_user_id = %s",
+                (int(TELEGRAM_CHAT_ID),)
+            )
+            row = cur.fetchone()
+            return row[0] if row else "MODERATE"
+    except Exception:
+        return "MODERATE"
+    finally:
+        conn.close()
+
+
+def _direction_label(signal_type: str, has_short_entry: bool = False) -> str:
+    if signal_type == "BUY":
+        return "🟢 롱 진입"
+    if signal_type == "SELL":
+        return "🔴 숏 진입" if has_short_entry else "🔴 롱 청산"
+    return "🟡 관망"
 MODE_LABEL = {
     "AUTO":        "자동매매",
     "SEMI_AUTO":   "반자동",
@@ -56,6 +94,10 @@ CHAT_SYSTEM_PROMPT = """\
 - 투자 판단의 최종 책임은 사용자에게 있음을 인지
 - 현재 시나리오에 없는 코인 질문은 "현재 시나리오 없음"으로 안내
 - 확실하지 않은 내용은 추측이라고 명시
+- 시나리오 가격은 반드시 "유튜버 제시 진입 목표가"로 표현할 것. "현재가"라고 절대 쓰지 말 것.
+- 각 시나리오마다 반드시 "X월 X일 게시글 기준" 형식으로 분석 날짜를 명시할 것.
+- 최근 HOLD/업데이트 게시글이 있으면 날짜와 함께 "최근 업데이트" 항목으로 포함할 것.
+- USDT.D 상황이 있으면 BTC/ETH 시나리오 해석에 반드시 연결해서 설명할 것.
 """
 
 
@@ -195,15 +237,17 @@ def _get_latest_scenario(coin_symbol: str) -> dict | None:
         with conn.cursor() as cur:
             # 1) 가장 최근 BUY/SELL — 진입가·손절가 기준
             cur.execute("""
-                SELECT signal_type, coin_symbol,
-                       entry_price_1, entry_price_2, entry_price_3, entry_price_4,
-                       stop_loss_price, take_profit_price,
-                       timeframe, is_reference_only,
-                       summary, invalidation, created_at
-                FROM analyses
-                WHERE is_active = TRUE AND coin_symbol = %s
-                  AND signal_type IN ('BUY', 'SELL')
-                ORDER BY created_at DESC
+                SELECT a.signal_type, a.coin_symbol,
+                       a.entry_price_1, a.entry_price_2, a.entry_price_3, a.entry_price_4,
+                       a.stop_loss_price, a.take_profit_price,
+                       a.timeframe, a.is_reference_only,
+                       a.summary, a.invalidation, a.created_at, p.published_at,
+                       a.short_entry_price
+                FROM analyses a
+                JOIN posts p ON a.post_id = p.id
+                WHERE a.is_active = TRUE AND a.coin_symbol = %s
+                  AND a.signal_type IN ('BUY', 'SELL')
+                ORDER BY a.created_at DESC
                 LIMIT 1
             """, (coin_symbol.upper(),))
             price_row = cur.fetchone()
@@ -240,6 +284,8 @@ def _get_latest_scenario(coin_symbol: str) -> dict | None:
         "summary":           base[10] if price_row else None,
         "invalidation":      base[11] if price_row else None,
         "created_at":        base[12] if price_row else base[2],
+        "published_at":      base[13] if price_row else None,
+        "short_entry_price": float(base[14]) if price_row and base[14] else None,
     }
 
     # 최신 신호가 HOLD이고 이전 BUY/SELL이 있으면 → 상태 업데이트 표시
@@ -379,9 +425,9 @@ async def send_analysis(
     entry_price_1: float | None = None,
     entry_price_2: float | None = None,
     entry_price_3: float | None = None,
-    entry_price_4: float | None = None,
     stop_loss_price: float | None = None,
     take_profit_price: float | None = None,
+    short_entry_price: float | None = None,
     timeframe: str | None = None,
     is_reference_only: bool = False,
 ) -> None:
@@ -389,29 +435,32 @@ async def send_analysis(
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
 
-    emoji = SIGNAL_EMOJI.get(signal_type, "⚪")
+    direction = _direction_label(signal_type, bool(short_entry_price))
     coin_line = f"*코인:* {coin_symbol}\n" if coin_symbol else ""
 
     tf_label = TIMEFRAME_LABEL.get(timeframe, timeframe) if timeframe else ""
     ref_suffix = " _(참고용 — 자동매매 없음)_" if is_reference_only else ""
     tf_line = f"*차트:* {tf_label}{ref_suffix}\n" if tf_label else ""
 
+    risk  = _get_user_risk()
+    entry_map = {
+        "CONSERVATIVE": entry_price_1,
+        "MODERATE":     entry_price_2,
+        "AGGRESSIVE":   entry_price_3,
+    }
+    entry_val  = entry_map.get(risk) or entry_price_1 or entry_price_2
+    risk_name  = RISK_LABEL.get(risk, "중립형")
+
     price_lines = ""
-    if entry_price_1:
-        price_lines += f"안정형: `${entry_price_1:,.0f}`\n"
-    if entry_price_2:
-        price_lines += f"중립형: `${entry_price_2:,.0f}`\n"
-    if entry_price_3:
-        price_lines += f"공격형: `${entry_price_3:,.0f}`\n"
-    if entry_price_4:
-        price_lines += f"초공격형: `${entry_price_4:,.0f}`\n"
+    if entry_val:
+        price_lines += f"진입가 ({risk_name}): `${entry_val:,.0f}`\n"
     if stop_loss_price:
         price_lines += f"손절: `${stop_loss_price:,.0f}`\n"
     if take_profit_price:
         price_lines += f"목표가: `${take_profit_price:,.0f}`\n"
 
     text = (
-        f"{emoji} *새 투자 신호 — {signal_type}*\n\n"
+        f"{direction} *새 투자 신호*\n\n"
         f"{coin_line}"
         f"{tf_line}"
         f"{price_lines}\n"
@@ -853,9 +902,10 @@ async def _callback_feedback(update, context) -> None:
     query = update.callback_query
     await query.answer()
 
-    parts = query.data.split(":")  # fb:ok:123 or fb:bad:123
+    parts = query.data.split(":")  # fb:ok:123 or fb:bad:123 or fb:fix:signal:123
     action = parts[1]
-    analysis_id = int(parts[2])
+    # fix 콜백은 parts[2]가 fix_type 문자열이므로 여기서 파싱하지 않음
+    analysis_id = int(parts[3] if action == "fix" else parts[2])
 
     if action == "ok":
         _save_feedback(analysis_id, "CORRECT", None)
@@ -1019,24 +1069,31 @@ async def _callback_setmode(update, context) -> None:
 
 def _format_scenario(s: dict) -> str:
     """분석 결과를 Telegram Markdown 텍스트로 포맷한다."""
-    emoji = SIGNAL_EMOJI.get(s["signal_type"], "⚪")
     coin = s["coin_symbol"]
     tf_label = TIMEFRAME_LABEL.get(s["timeframe"], s["timeframe"]) if s.get("timeframe") else ""
 
-    lines = [f"{emoji} *{coin} 시나리오*"]
+    pub_at = s.get("published_at")
+    date_str = pub_at.strftime("%m/%d") if pub_at else (
+        s["created_at"].strftime("%m/%d") if s.get("created_at") else ""
+    )
+
+    direction = _direction_label(s["signal_type"], bool(s.get("short_entry_price")))
+    lines = [f"{direction} *{coin} 시나리오*"]
     if tf_label:
         ref = " _(참고용)_" if s.get("is_reference_only") else ""
         lines.append(f"차트: {tf_label}{ref}")
+    if date_str:
+        lines.append(f"📅 {date_str} 게시글 기준")
     lines.append("")
 
-    if s["entry_price_1"]:
-        lines.append(f"안정형: `${s['entry_price_1']:,.0f}`")
-    if s["entry_price_2"]:
-        lines.append(f"중립형: `${s['entry_price_2']:,.0f}`")
-    if s["entry_price_3"]:
-        lines.append(f"공격형: `${s['entry_price_3']:,.0f}`")
-    if s["entry_price_4"]:
-        lines.append(f"초공격형: `${s['entry_price_4']:,.0f}`")
+    risk      = _get_user_risk()
+    entry_key = RISK_TO_ENTRY_KEY.get(risk, "entry_price_2")
+    entry_val = s.get(entry_key) or s.get("entry_price_1") or s.get("entry_price_2")
+    risk_name = RISK_LABEL.get(risk, "중립형")
+
+    if entry_val:
+        lines.append(f"*유튜버 제시 진입 목표가 ({risk_name})*")
+        lines.append(f"  `${entry_val:,.0f}`")
     if s["stop_loss_price"]:
         lines.append(f"손절: `${s['stop_loss_price']:,.0f}`")
     if s["take_profit_price"]:
@@ -1062,16 +1119,30 @@ def _fetch_chat_context_sync() -> str:
             settings_row = cur.fetchone()
 
             cur.execute("""
-                SELECT coin_symbol, signal_type, timeframe,
-                       entry_price_1, entry_price_2, entry_price_3,
-                       stop_loss_price, take_profit_price, absolute_stop,
-                       summary, invalidation
-                FROM analyses
-                WHERE is_active = TRUE AND signal_type IN ('BUY','SELL')
-                  AND coin_symbol IS NOT NULL
-                ORDER BY created_at DESC LIMIT 5
+                SELECT a.coin_symbol, a.signal_type, a.timeframe,
+                       a.entry_price_1, a.entry_price_2, a.entry_price_3,
+                       a.stop_loss_price, a.take_profit_price, a.absolute_stop,
+                       a.summary, a.invalidation, p.published_at
+                FROM analyses a
+                JOIN posts p ON a.post_id = p.id
+                WHERE a.is_active = TRUE AND a.signal_type IN ('BUY','SELL')
+                  AND a.coin_symbol IS NOT NULL
+                ORDER BY a.created_at DESC LIMIT 5
             """)
             scenarios = cur.fetchall()
+
+            # 최근 7일 HOLD 업데이트 — 기존 시나리오에 영향을 주는 최신 게시글
+            cur.execute("""
+                SELECT a.coin_symbol, a.signal_type, a.timeframe,
+                       a.summary, p.published_at
+                FROM analyses a
+                JOIN posts p ON a.post_id = p.id
+                WHERE a.signal_type = 'HOLD'
+                  AND a.coin_symbol IS NOT NULL
+                  AND p.published_at >= NOW() - INTERVAL '7 days'
+                ORDER BY p.published_at DESC LIMIT 6
+            """)
+            recent_holds = cur.fetchall()
 
             cur.execute("""
                 SELECT symbol, side, price, status
@@ -1100,17 +1171,25 @@ def _fetch_chat_context_sync() -> str:
     if scenarios:
         lines.append("\n[활성 투자 시나리오]")
         for s in scenarios:
-            coin, sig, tf, e1, e2, e3, sl, tp, abs_stop, summary, inv = s
+            coin, sig, tf, e1, e2, e3, sl, tp, abs_stop, summary, inv, pub_at = s
             tf_str = {"DAILY": "일봉", "HOURLY": "시간봉", "WEEKLY": "주봉"}.get(tf or "", tf or "")
+            date_str = pub_at.strftime("%m/%d") if pub_at else "-"
             lines.append(
-                f"• {sig} {coin} ({tf_str})\n"
-                f"  진입: {fmt(e1)} / {fmt(e2)} / {fmt(e3)}\n"
+                f"• {sig} {coin} ({tf_str}) — {date_str} 게시글 기준\n"
+                f"  유튜버 제시 진입 목표가: {fmt(e1)} / {fmt(e2)} / {fmt(e3)}\n"
                 f"  손절: {fmt(sl)} | 목표: {fmt(tp)} | 마지노선: {fmt(abs_stop)}\n"
                 f"  요약: {(summary or '')[:120]}\n"
                 f"  무효 조건: {(inv or '')[:80]}"
             )
     else:
         lines.append("\n[활성 투자 시나리오 없음]")
+
+    if recent_holds:
+        lines.append("\n[최근 시나리오 업데이트 (HOLD/관망)]")
+        for coin, sig, tf, summary, pub_at in recent_holds:
+            tf_str = {"DAILY": "일봉", "HOURLY": "시간봉", "WEEKLY": "주봉"}.get(tf or "", tf or "")
+            date_str = pub_at.strftime("%m/%d") if pub_at else "-"
+            lines.append(f"• {date_str} {coin or '?'} ({tf_str}): {(summary or '')[:100]}")
 
     if trades:
         lines.append("\n[최근 거래]")
@@ -1134,6 +1213,270 @@ def _fetch_chat_context_sync() -> str:
                 lines.append(f"  영향: {implication}")
 
     return "\n".join(lines)
+
+
+def _get_analyses_for_coin(coin: str) -> list[dict]:
+    """해당 코인의 활성 BUY/SELL 분석 전체를 반환한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT a.id, a.signal_type, a.timeframe,
+                       a.entry_price_1, a.entry_price_2, a.entry_price_3, a.entry_price_4,
+                       a.stop_loss_price, a.absolute_stop, a.take_profit_price,
+                       a.summary, a.invalidation, a.risk_reward_ratio, p.published_at
+                FROM analyses a
+                JOIN posts p ON a.post_id = p.id
+                WHERE a.is_active = TRUE
+                  AND a.coin_symbol = %s
+                  AND a.signal_type IN ('BUY', 'SELL')
+                ORDER BY a.created_at DESC
+                LIMIT 3
+            """, (coin.upper(),))
+            rows = cur.fetchall()
+            return [
+                {
+                    "id":              r[0],
+                    "signal_type":     r[1],
+                    "timeframe":       r[2],
+                    "entry_price_1":   float(r[3]) if r[3] else None,
+                    "entry_price_2":   float(r[4]) if r[4] else None,
+                    "entry_price_3":   float(r[5]) if r[5] else None,
+                    "entry_price_4":   float(r[6]) if r[6] else None,
+                    "stop_loss_price": float(r[7]) if r[7] else None,
+                    "absolute_stop":   float(r[8]) if r[8] else None,
+                    "take_profit":     float(r[9]) if r[9] else None,
+                    "summary":         r[10],
+                    "invalidation":    r[11],
+                    "rr_ratio":        float(r[12]) if r[12] else None,
+                    "published_at":    r[13],
+                }
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+def _classify_entry_position(entry_price: float, analysis: dict) -> str:
+    """현재 진입가가 분석의 어느 성향 구간에 위치하는지 판단한다."""
+    signal = analysis["signal_type"]
+    e1 = analysis.get("entry_price_1")
+    e2 = analysis.get("entry_price_2")
+    e3 = analysis.get("entry_price_3")
+    e4 = analysis.get("entry_price_4")
+
+    levels = [(v, label) for v, label in [
+        (e1, "안정형"), (e2, "중립형"), (e3, "공격형"), (e4, "초공격형")
+    ] if v is not None]
+
+    if not levels:
+        return "진입 구간 정보 없음"
+
+    # BUY: 높은 가격이 안정형, 낮은 가격이 공격형
+    # SELL: 낮은 가격이 안정형, 높은 가격이 공격형
+    if signal == "BUY":
+        levels_sorted = sorted(levels, key=lambda x: x[0], reverse=True)  # 높은→낮은
+    else:
+        levels_sorted = sorted(levels, key=lambda x: x[0])  # 낮은→높은
+
+    # 가장 가까운 레벨 찾기
+    closest = min(levels_sorted, key=lambda x: abs(x[0] - entry_price))
+    diff_pct = (entry_price - closest[0]) / closest[0] * 100
+
+    if abs(diff_pct) <= 1.0:
+        return f"{closest[1]} 구간 진입 (`${closest[0]:,.0f}` 기준, {diff_pct:+.1f}%)"
+
+    # 구간 사이에 있는 경우 — 인접 두 레벨 사이
+    for i in range(len(levels_sorted) - 1):
+        hi_price, hi_label = levels_sorted[i]
+        lo_price, lo_label = levels_sorted[i + 1]
+        lo, hi = min(hi_price, lo_price), max(hi_price, lo_price)
+        if lo <= entry_price <= hi:
+            return f"{hi_label} ~ {lo_label} 사이 진입"
+
+    # 범위 밖
+    if signal == "BUY":
+        top_price, top_label = levels_sorted[0]
+        bot_price, bot_label = levels_sorted[-1]
+        if entry_price > top_price:
+            over_pct = (entry_price - top_price) / top_price * 100
+            return f"분석 구간보다 {over_pct:.1f}% 높은 진입 ({top_label} 위)"
+        else:
+            under_pct = (bot_price - entry_price) / bot_price * 100
+            return f"분석 구간보다 {under_pct:.1f}% 낮은 진입 ({bot_label} 아래)"
+    else:
+        top_price, top_label = levels_sorted[-1]
+        bot_price, bot_label = levels_sorted[0]
+        if entry_price < bot_price:
+            return f"분석 구간보다 낮은 진입 ({bot_label} 아래)"
+        else:
+            return f"분석 구간보다 높은 진입 ({top_label} 위)"
+
+
+def _format_position_analysis(pos: dict, analyses: list[dict]) -> str:
+    """포지션 정보와 매칭된 분석을 종합해 응답 텍스트를 만든다."""
+    coin      = pos["coin"]
+    side      = pos["side"]
+    entry     = pos["entry_price"]
+    mark      = pos["mark_price"]
+    pnl_pct   = pos["pnl_pct"]
+    leverage  = pos["leverage"]
+    liq_price = pos.get("liq_price")
+
+    side_emoji = "🟢 Long" if side == "LONG" else "🔴 Short"
+    pnl_emoji  = "📈" if pnl_pct >= 0 else "📉"
+
+    lines = [
+        f"*{coin} 포지션 분석*",
+        "",
+        f"방향: {side_emoji} {leverage}x | 진입가: `${entry:,.2f}`",
+        f"현재가: `${mark:,.2f}` {pnl_emoji} `{pnl_pct:+.2f}%`",
+    ]
+    if liq_price:
+        lines.append(f"청산가: `${liq_price:,.2f}`")
+
+    if not analyses:
+        lines += [
+            "",
+            "⚠️ 현재 이 코인의 활성 시나리오가 없습니다.",
+            "시나리오 없이 진입한 포지션이거나, 분석이 만료됐을 수 있습니다.",
+        ]
+        return "\n".join(lines)
+
+    for a in analyses:
+        tf_label  = TIMEFRAME_LABEL.get(a["timeframe"] or "", a["timeframe"] or "")
+        date_str  = a["published_at"].strftime("%m/%d") if a["published_at"] else "-"
+        sig_emoji = SIGNAL_EMOJI.get(a["signal_type"], "⚪")
+        entry_pos = _classify_entry_position(entry, a)
+
+        lines += [
+            "",
+            f"━━━ {sig_emoji} {tf_label} 시나리오 ({date_str}) ━━━",
+            f"📍 진입 위치: {entry_pos}",
+        ]
+
+        # 손절까지 거리
+        sl = a.get("stop_loss_price")
+        ab = a.get("absolute_stop")
+        tp = a.get("take_profit")
+
+        if sl:
+            sl_dist = (entry - sl) / entry * 100 if side == "LONG" else (sl - entry) / entry * 100
+            sl_remain = (mark - sl) / mark * 100 if side == "LONG" else (sl - mark) / mark * 100
+            lines.append(
+                f"🛑 손절까지: `{sl_remain:.1f}%` 남음 (손절가 `${sl:,.0f}`)"
+            )
+        if ab:
+            ab_dist = (mark - ab) / mark * 100 if side == "LONG" else (ab - mark) / mark * 100
+            lines.append(f"⛔ 마지노선: `${ab:,.0f}` ({ab_dist:.1f}% 거리)")
+        if tp:
+            tp_dist = (tp - mark) / mark * 100 if side == "LONG" else (mark - tp) / mark * 100
+            lines.append(f"🎯 목표까지: `{tp_dist:.1f}%` 남음 (목표가 `${tp:,.0f}`)")
+        if a.get("rr_ratio"):
+            lines.append(f"손익비: `{a['rr_ratio']:.1f}R`")
+
+        # 현재가가 손절 근처인지 경고
+        if sl and side == "LONG" and mark < sl * 1.03:
+            lines.append("⚠️ *현재가가 손절 구간 근처입니다. 주의 필요.*")
+        elif sl and side == "SHORT" and mark > sl * 0.97:
+            lines.append("⚠️ *현재가가 손절 구간 근처입니다. 주의 필요.*")
+
+        # 청산가와 손절 관계
+        if liq_price and sl:
+            if side == "LONG" and liq_price > sl:
+                lines.append("⚠️ *청산가가 손절가보다 높습니다 — 레버리지 재검토 권장*")
+            elif side == "SHORT" and liq_price < sl:
+                lines.append("⚠️ *청산가가 손절가보다 낮습니다 — 레버리지 재검토 권장*")
+
+        if a.get("summary"):
+            lines.append(f"\n💬 {a['summary'][:120]}")
+        if a.get("invalidation"):
+            lines.append(f"🚫 무효 조건: {a['invalidation'][:80]}")
+
+    return "\n".join(lines)
+
+
+async def _handle_photo(update, context) -> None:
+    """포지션 스크린샷 수신 → GPT-4o Vision 분석 → 시나리오 매칭 응답."""
+    import asyncio
+    import base64
+    from openai import AsyncOpenAI
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    # 가장 고해상도 사진 선택
+    photo = update.message.photo[-1]
+    file_obj = await context.bot.get_file(photo.file_id)
+    image_bytes = await file_obj.download_as_bytearray()
+    b64_image = base64.b64encode(image_bytes).decode()
+
+    extraction_prompt = """\
+이 이미지는 Bybit 선물 거래 포지션 화면입니다.
+다음 정보를 JSON으로 추출하세요. 여러 포지션이 있으면 배열로.
+
+{
+  "positions": [
+    {
+      "coin": "ETH",           // 코인 심볼 (ETHUSDT → ETH)
+      "side": "LONG",          // LONG 또는 SHORT
+      "leverage": 3,           // 레버리지 배수 (숫자)
+      "quantity": 0.04,        // 수량
+      "entry_price": 2073.33,  // 평균 진입가
+      "mark_price": 2108.86,   // 현재(마크) 가격
+      "pnl_pct": 5.13,         // 수익률 % (양수=수익, 음수=손실)
+      "liq_price": 1389.17     // 청산 예상가 (없으면 null)
+    }
+  ]
+}
+
+JSON만 반환하세요. 포지션 정보가 없으면 {"positions": []} 반환."""
+
+    try:
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        resp = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text",      "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}},
+                ],
+            }],
+            max_tokens=400,
+            temperature=0,
+        )
+
+        raw = resp.choices[0].message.content.strip()
+        # ```json ... ``` 블록 제거
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+        positions = data.get("positions", [])
+
+    except Exception as e:
+        await update.message.reply_text(f"포지션 추출 실패: {e}")
+        return
+
+    if not positions:
+        await update.message.reply_text("포지션 정보를 인식하지 못했습니다.\nBybit 포지션 탭이 보이는 화면을 보내주세요.")
+        return
+
+    loop = asyncio.get_event_loop()
+    reply_parts = []
+
+    for pos in positions:
+        coin = pos.get("coin", "").upper()
+        if not coin:
+            continue
+        analyses = await loop.run_in_executor(None, _get_analyses_for_coin, coin)
+        reply_parts.append(_format_position_analysis(pos, analyses))
+
+    if reply_parts:
+        await update.message.reply_text("\n\n".join(reply_parts), parse_mode="Markdown")
+    else:
+        await update.message.reply_text("인식된 포지션이 없습니다.")
 
 
 async def _handle_chat(update, context) -> None:
@@ -1216,6 +1559,9 @@ def run_bot() -> None:
     app.add_handler(CallbackQueryHandler(_callback_scenario, pattern="^scenario:"))
     app.add_handler(CallbackQueryHandler(_callback_setmode,  pattern="^setmode:"))
     app.add_handler(CallbackQueryHandler(_callback_feedback,  pattern="^fb:"))
+
+    # 포지션 스크린샷 → 시나리오 매칭
+    app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
 
     # 피드백 수정 입력 → GPT 대화 순으로 우선순위
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_correction_or_chat))

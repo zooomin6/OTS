@@ -18,6 +18,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, unquote, urlparse
 
 # Windows에서 asyncio 이벤트 루프 정책 문제 방지
 if sys.platform == "win32":
@@ -44,6 +45,17 @@ SELENIUM_URL    = os.environ.get("SELENIUM_URL", "http://selenium:4444/wd/hub") 
 
 # 게시글 본문에서 URL을 추출하는 정규식
 _URL_PATTERN = re.compile(r'https?://[^\s\]\)>\"\']+')
+
+
+def _resolve_url(href: str) -> str:
+    """YouTube 리다이렉트 URL이면 실제 대상 URL을 반환, 아니면 그대로."""
+    if "youtube.com/redirect" in href:
+        qs = parse_qs(urlparse(href).query)
+        q = qs.get("q", [None])[0]
+        if q:
+            return unquote(q)
+    return href
+
 
 
 def _parse_relative_date(text: str) -> datetime | None:
@@ -219,15 +231,18 @@ def _scrape_posts(driver: webdriver.Remote) -> list[dict]:
             existing_urls = {l["url"] for l in links}
             for a_el in el.find_elements(By.CSS_SELECTOR, "#content-text a"):
                 href = a_el.get_attribute("href") or ""
-                if not href or href in existing_urls:
+                if not href:
                     continue
-                if "tradingview.com" in href:
-                    links.append({"url": href, "link_type": "tradingview"})
-                elif "youtube.com" in href or "youtu.be" in href:
-                    links.append({"url": href, "link_type": "youtube"})
+                real_url = _resolve_url(href)  # YouTube 리다이렉트면 실제 URL 추출
+                if real_url in existing_urls:
+                    continue
+                if "tradingview.com" in real_url:
+                    links.append({"url": real_url, "link_type": "tradingview"})
+                elif "youtube.com" in real_url or "youtu.be" in real_url:
+                    links.append({"url": real_url, "link_type": "youtube"})
                 else:
-                    links.append({"url": href, "link_type": "other"})
-                existing_urls.add(href)
+                    links.append({"url": real_url, "link_type": "other"})
+                existing_urls.add(real_url)
 
             posts.append({
                 "post_id":      post_id,
