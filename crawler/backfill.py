@@ -32,22 +32,52 @@ REDIS_URL       = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 DATABASE_URL    = os.environ["DATABASE_URL"]
 SELENIUM_URL    = os.environ.get("SELENIUM_URL", "http://selenium:4444/wd/hub")
 
-BACKFILL_DAYS   = 180  # 수집 기간 (일)
-SCROLL_PAUSE    = 2.0  # 스크롤 후 대기 (초)
-MAX_SCROLLS     = 600  # 무한루프 방지 상한
+BACKFILL_DAYS   = int(os.environ.get("BACKFILL_DAYS", "730"))  # 기본 2년 (환경변수로 덮어쓰기 가능)
+SCROLL_PAUSE    = 2.0   # 스크롤 후 대기 (초)
+MAX_SCROLLS     = 1200  # 무한루프 방지 상한 (날짜 범위 넓어져 증가)
 
 _URL_PATTERN = re.compile(r'https?://[^\s\]\)>\"\']+')
 
 
 def _parse_relative_date(text: str) -> datetime | None:
     """
-    유튜브 상대 시간 텍스트 → datetime 변환.
-    예: "3주 전" → 21일 전, "1개월 전" → 30일 전
+    유튜브 상대/절대 시간 텍스트 → datetime 변환.
+    상대: "3주 전" → 21일 전
+    절대: "2023년 3월 15일", "2023. 3. 15.", "Mar 15, 2023"
     """
     now = datetime.now()
     text = text.strip()
 
-    patterns = [
+    # 절대 날짜 (한국어)
+    m = re.search(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", text)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+
+    # 절대 날짜 (점 구분: 2023. 3. 15.)
+    m = re.search(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})", text)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+
+    # 절대 날짜 (영어: Jan 15, 2023 / January 15, 2023)
+    m = re.search(
+        r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+(\d{1,2}),?\s+(\d{4})",
+        text, re.IGNORECASE,
+    )
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
+        except ValueError:
+            pass
+
+    relative_patterns = [
         (r"(\d+)\s*분\s*전",   lambda n: now - timedelta(minutes=n)),
         (r"(\d+)\s*시간\s*전", lambda n: now - timedelta(hours=n)),
         (r"(\d+)\s*일\s*전",   lambda n: now - timedelta(days=n)),
@@ -62,7 +92,7 @@ def _parse_relative_date(text: str) -> datetime | None:
         (r"(\d+)\s*month",   lambda n: now - timedelta(days=n * 30)),
         (r"(\d+)\s*year",    lambda n: now - timedelta(days=n * 365)),
     ]
-    for pattern, calc in patterns:
+    for pattern, calc in relative_patterns:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
             return calc(int(m.group(1)))
@@ -184,15 +214,15 @@ def _extract_cookies(driver) -> None:
         print("─" * 60)
 
 
-def _scrape_all(driver) -> list[dict]:
+def _scrape_all(driver, days: int = BACKFILL_DAYS) -> list[dict]:
     """
-    커뮤니티 탭을 스크롤하며 BACKFILL_DAYS 이내 게시글을 모두 수집한다.
+    커뮤니티 탭을 스크롤하며 days 이내 게시글을 모두 수집한다.
     """
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.support.ui import WebDriverWait
 
-    cutoff = datetime.now() - timedelta(days=BACKFILL_DAYS)
+    cutoff = datetime.now() - timedelta(days=days)
 
     driver.get(f"https://www.youtube.com/{CHANNEL_ID}/posts")
     try:
@@ -349,13 +379,20 @@ async def _publish_kafka(saved: list[tuple[int, dict]]) -> None:
 
 
 async def main() -> None:
-    print(f"[backfill] 시작 — 최근 {BACKFILL_DAYS}일 게시글 수집")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--days", type=int, default=BACKFILL_DAYS,
+                        help=f"수집 기간(일), 기본={BACKFILL_DAYS}")
+    args, _ = parser.parse_known_args()
+    days = args.days
+
+    print(f"[backfill] 시작 — 최근 {days}일 게시글 수집")
 
     driver = _build_driver()
     try:
         _inject_cookies(driver)
         _check_login(driver)
-        posts = _scrape_all(driver)
+        posts = _scrape_all(driver, days=days)
         _extract_cookies(driver)
     finally:
         driver.quit()

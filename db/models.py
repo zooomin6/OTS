@@ -91,6 +91,9 @@ class Analysis(Base):
     raw_response       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
     feedback           : Mapped[Optional[str]]     = mapped_column(String(20), nullable=True)
     feedback_note      : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    feedback_source    : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)   # 'MANUAL' | 'AUTO'
+    virtual_pnl_pct    : Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2), nullable=True)
+    virtual_trade_json : Mapped[Any]               = mapped_column(JSONB, nullable=True)
     is_active          : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
     expires_at         : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
     created_at         : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))

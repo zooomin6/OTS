@@ -200,6 +200,23 @@ services:
       - .:/app
     command: python briefing/daily_briefing.py
 
+  market-watch:
+    build:
+      context: .
+      dockerfile: Dockerfile.analysis
+    container_name: coin_market_watch
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+    command: python -m market_watch.watcher
+
   crawler:
     build:
       context: .
@@ -221,6 +238,23 @@ services:
       PYTHONUNBUFFERED: "1"
     volumes:
       - .:/app
+
+  backtest:
+    build:
+      context: .
+      dockerfile: Dockerfile.analysis
+    container_name: coin_backtest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+    command: python -m backtest.scheduler
 
 volumes:
   postgres_data:

@@ -84,6 +84,17 @@ SYSTEM_PROMPT = """\
 - 이미지 차트에 표시된 수치가 있으면 텍스트와 함께 참고.
 - signal_type은 유튜버의 방향성(BUY/SELL/HOLD)을 따릅니다.
 
+**이 유튜버의 기본 방향성: 롱(BUY) 편향**
+- 기본적으로 롱(매수) 중심으로 분석합니다.
+- **"지지 구간"** 언급 → 해당 가격에서 롱 진입 자리 = signal_type BUY, entry_price로 추출
+
+**"저항 구간" 해석 규칙:**
+- **"X 저항"**, **"X에서 저항"**, **"X까지 목표"** → 무조건 take_profit_price = X (롱 익절 자리)
+  - 추가 설명 없이 "저항"이라고만 해도 → take_profit_price로 처리. SELL 신호 아님.
+- **숏 진입**으로 해석하는 경우는 오직 유튜버가 명시적으로 언급할 때만:
+  - "X에서 숏", "X에서 공매도", "X에서 매도 진입" → signal_type = SELL, short_entry_price = X
+- **롱 익절 + 숏 동시**: "X에서 롱 끊고 숏으로 전환" → analyses 2개 분리 (BUY take_profit + SELL 신호)
+
 ### 2. 차트 시간 단위 (timeframe) 추출
 - 게시글/차트에서 "월봉", "주봉", "일봉", "시봉/시간봉/1H/4H" 키워드를 찾아 판단.
 - MONTHLY(월봉), WEEKLY(주봉): 참고용 분석 — 자동매매 주문 없음.
@@ -233,6 +244,10 @@ SYSTEM_PROMPT = """\
 - "오늘 봉이 저가를 지키고 끝나면" → 확인 후 진입 조건 (조건부 BUY)
 - "조금 더 안전하게 하고 싶은 분" → 안정형(entry_price_1) 표현
 
+**지지 구조 표현**:
+- "삼발이", "삼발이 기법", "삼발이 박격포 기법" → 3개 지지점에서 반등하는 패턴 = 지지가 견고함. signal_type = BUY, 지지 신뢰도 높음으로 해석
+- "삼발이 나름 견고", "삼발이 견고하게 만들었음" → 3중 지지 확인 완료, 상승 전환 기대 (BUY 또는 HOLD 유지)
+
 **시나리오 레이블**:
 - "메인 시나리오" → 핵심 시나리오 유효
 - "서브 시나리오", "대안" → 보조 시나리오 (is_reference_only 고려)
@@ -329,6 +344,15 @@ SYSTEM_PROMPT = """\
 - 생일 축하, 개인 일상 내용만 있는 경우
 - "롯됐음", 짧은 감탄사만 있는 경우
 
+**회고성 게시글 처리 (중요):**
+다음 패턴이 포함된 게시글은 **새로운 매매 신호가 아닙니다**:
+- "~이었죠", "~였죠", "~맞췄습니다", "~잡아드렸습니다", "~적중했습니다"
+- "전세계에서 가장 정확하게 미리 잡아드렸습니다"
+- "브리핑한 대로 됐죠", "말한 대로 됐습니다"
+→ 이런 표현이 가격과 함께 나오면 signal_type = HOLD로 처리
+→ 해당 가격은 **이미 지난 구간**이므로 entry_price로 추출하지 말 것
+→ 단, 게시글 내에 "앞으로" 방향의 새로운 신호가 명시되면 그것만 추출
+
 ### 13. 차트 레이블 전용 게시글 처리
 
 **텍스트에 구체적 가격 숫자가 없고 차트 레이블(A, B, C, 주황박스 등)만 언급된 경우**:
@@ -350,6 +374,34 @@ SYSTEM_PROMPT = """\
 - "X 아래에서 매수" → entry_price_1 = X × 0.995 (0.5% 아래)
 - "X ~ Y 구간 매수" → entry_price_1 = Y (상단, 안정형), entry_price_2 = (X+Y)/2, entry_price_3 = X (하단, 공격형)
 - 이미 매수 중 "추가 매수 X" → entry_price_2 또는 entry_price_3 = X
+
+### 16. 목표가(take_profit_price) 추론 강화
+
+유튜버가 명확한 목표가를 제시하지 않아도 다음 순서로 추론하세요:
+
+**1순위 — 직접 언급:**
+- "X 목표", "X에서 익절", "X 도달 시 매도", "X까지 간다" → take_profit_price = X
+- "1차 목표 X, 2차 목표 Y" → take_profit_price = X (2차는 scenario에 포함)
+- "X~Y에서 매도", "X~Y 완벽한 타점" → take_profit_price = X (하단, 보수적 목표)
+
+**2순위 — 저항선/전고점 (BUY 신호의 목표가):**
+- "X 저항", "X에서 저항", "X까지 오르면 막힌다" → take_profit_price = X (롱의 익절 구간)
+- "전고점", "이전 고점", "A 고점(위)" 등 가격이 함께 언급되면 → take_profit_price = 해당 가격
+- "X 돌파하면 Y까지" → take_profit_price = Y
+- 이 유튜버는 롱 편향이므로 "저항"은 SELL 신호가 아닌 BUY의 take_profit으로 처리
+
+**3순위 — 차트 이미지 기반 (이미지 있을 때):**
+- 차트에 분홍색 박스·저항선이 진입가 위에 표시되어 있으면 → 그 가격 = take_profit_price
+- 차트 레이블 "A", "B" 등이 진입 후 위쪽에 있으면 → 가장 가까운 것 = take_profit_price
+
+**4순위 — R:R 2:1 역산 (최후 수단, 위 3가지로 추출 불가할 때만):**
+- entry_price_2와 stop_loss_price가 모두 있을 때:
+  BUY: take_profit_price = entry_price_2 + (entry_price_2 - stop_loss_price) × 2
+  SELL: take_profit_price = short_entry_price - (stop_loss_price - short_entry_price) × 2
+- 이 방법 사용 시 summary 끝에 "(목표가: R:R 2:1 추정)" 추가
+
+**null 허용:**
+- 차트도 없고 저항선 언급도 없고 entry/SL도 불명확한 순수 시황 게시글 → null 유지
 """
 
 
@@ -605,7 +657,7 @@ def _create_price_alerts_sync(
 def _fetch_recent_context_sync(limit: int = 8) -> str:
     """
     최근 BUY/SELL 분석 결과를 few-shot 예시로 반환.
-    GPT가 이 유튜버의 최신 패턴을 보고 새 게시글을 분석할 수 있도록 한다.
+    BTC/ETH/USDT.D로 필터링하고 가상 P&L 정보를 포함한다.
     """
     conn = _db_connect()
     try:
@@ -614,15 +666,16 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
                 SELECT p.content, a.signal_type, a.coin_symbol, a.timeframe,
                        a.entry_price_1, a.entry_price_2, a.entry_price_3,
                        a.stop_loss_price, a.take_profit_price, a.summary,
-                       a.feedback
+                       a.feedback, a.feedback_source, a.virtual_pnl_pct
                 FROM analyses a
                 JOIN posts p ON a.post_id = p.id
                 WHERE a.signal_type IN ('BUY', 'SELL')
                   AND a.summary IS NOT NULL AND a.summary != ''
-                  AND a.coin_symbol IS NOT NULL
+                  AND a.coin_symbol IN ('BTC', 'ETH', 'USDT.D')
                   AND (a.feedback IS NULL OR a.feedback = 'CORRECT')
                 ORDER BY
                   CASE WHEN a.feedback = 'CORRECT' THEN 0 ELSE 1 END,
+                  CASE WHEN a.virtual_pnl_pct IS NOT NULL THEN a.virtual_pnl_pct ELSE 0 END DESC,
                   a.created_at DESC
                 LIMIT %s
             """, (limit,))
@@ -635,15 +688,26 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
 
     examples = []
     for row in reversed(rows):  # 오래된 것부터 → 최신 순서로
-        content_preview, signal, coin, tf, e1, e2, e3, sl, _, summary, feedback = row
+        (content_preview, signal, coin, tf,
+         e1, e2, e3, sl, _, summary,
+         feedback, fb_source, pnl_pct) = row
+
         tf_str = tf or "미확인"
-        e_str = " / ".join(
-            f"{v:,.0f}" for v in [e1, e2, e3] if v
-        ) or "-"
+        e_str  = " / ".join(f"{v:,.0f}" for v in [e1, e2, e3] if v) or "-"
         sl_str = f"{sl:,.0f}" if sl else "-"
-        verified = " [검증됨✅]" if feedback == "CORRECT" else ""
+
+        # 라벨: 검증 여부 + P&L 표시
+        if feedback == "CORRECT":
+            if pnl_pct is not None:
+                src = "AUTO" if fb_source == "AUTO" else "MANUAL"
+                label = f" [검증됨✅{src} {float(pnl_pct):+.1f}%]"
+            else:
+                label = " [검증됨✅]"
+        else:
+            label = ""
+
         examples.append(
-            f"[예시{verified}] 게시글: {content_preview[:120]}...\n"
+            f"[예시{label}] 게시글: {content_preview[:120]}...\n"
             f"→ 신호:{signal} 코인:{coin} 타임프레임:{tf_str} "
             f"진입가:{e_str} 손절:{sl_str}\n"
             f"→ 요약: {summary[:100]}"
@@ -653,6 +717,93 @@ def _fetch_recent_context_sync(limit: int = 8) -> str:
         "\n\n--- 이 채널의 최근 분석 패턴 참고 (few-shot) ---\n"
         + "\n\n".join(examples)
         + "\n--- 위 패턴을 참고해 아래 새 게시글을 분석하세요 ---\n"
+    )
+
+
+def _fetch_coin_active_context_sync(before_post_id: int) -> str:
+    """
+    현재 게시글 이전의 BTC/ETH/USDT.D 활성 시나리오를 시간순으로 반환.
+
+    GPT가 이 컨텍스트를 보고:
+    - 이미 진입 중인 포지션이 있는지 파악
+    - 새 게시글의 가격이 기존 진입가 대비 높은지(TP/저항) 낮은지(추가매수) 판단
+    - 주봉/월봉 기준 큰 그림(마지노선, 지지선) 인식
+    """
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    a.coin_symbol, a.signal_type, a.timeframe,
+                    a.entry_price_1, a.entry_price_2,
+                    a.stop_loss_price, a.take_profit_price,
+                    a.absolute_stop,
+                    a.youtuber_zone_low, a.youtuber_zone_high,
+                    a.summary, a.created_at
+                FROM analyses a
+                WHERE a.coin_symbol IN ('BTC', 'ETH', 'USDT.D')
+                  AND a.is_active = TRUE
+                  AND a.post_id < %s
+                  AND a.signal_type IN ('BUY', 'SELL', 'HOLD')
+                ORDER BY a.coin_symbol, a.created_at ASC
+                LIMIT 12
+            """, (before_post_id,))
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return ""
+
+    from datetime import datetime as _dt
+
+    now = _dt.now()
+    current_coin = None
+    blocks: list[str] = []
+    coin_lines: list[str] = []
+
+    def _flush():
+        if current_coin and coin_lines:
+            blocks.append(f"[{current_coin}]\n" + "\n".join(coin_lines))
+
+    for row in rows:
+        coin, signal, tf, e1, e2, sl, tp, abs_stop, zl, zh, summary, created_at = row
+
+        if coin != current_coin:
+            _flush()
+            coin_lines = []
+            current_coin = coin
+
+        tf_str   = tf or "?"
+        days_ago = (now - created_at).days if created_at else 0
+        time_str = f"{days_ago}일 전" if days_ago >= 1 else "오늘"
+
+        parts = [f"  {time_str} [{tf_str}] {signal}"]
+        if e1:  parts.append(f"진입:{float(e1):,.0f}")
+        if e2:  parts.append(f"/{float(e2):,.0f}")
+        if sl:  parts.append(f"  손절:{float(sl):,.0f}")
+        if tp:  parts.append(f"  목표:{float(tp):,.0f}")
+        if abs_stop: parts.append(f"  마지노선:{float(abs_stop):,.0f}")
+        if zl and zh: parts.append(f"  구간:{float(zl):,.0f}~{float(zh):,.0f}")
+
+        if summary:
+            parts.append(f"\n    요약: {summary[:80]}")
+
+        coin_lines.append("".join(parts))
+
+    _flush()
+
+    if not blocks:
+        return ""
+
+    return (
+        "\n\n=== 이전 게시글 기준 현재 활성 시나리오 (시간순, 맥락 파악용) ===\n"
+        + "\n\n".join(blocks)
+        + "\n\n"
+        + "※ 주의: 위 시나리오에서 이미 진입한 포지션이 있다면,\n"
+        + "   새 게시글의 가격 언급이 기존 진입가보다 높으면 → 목표가(take_profit) 또는 회고\n"
+        + "   기존 진입가보다 낮으면 → 추가매수 또는 손절 구간\n"
+        + "=== 위 맥락을 반드시 참고하세요 ===\n"
     )
 
 
@@ -697,19 +848,28 @@ def _parse_analysis_item(item: dict, raw: str) -> dict:
 async def _analyze_with_gpt(
     content: str,
     image_urls: list[str] | None = None,
+    post_db_id: int | None = None,
 ) -> tuple[list[dict], dict]:
     """
     게시글 텍스트와 이미지를 GPT-4o로 분석한다.
     반환: (analyses 리스트, market_indicators 딕트)
     게시글에 여러 코인/타임프레임이 있으면 analyses에 복수 항목이 담긴다.
     """
+    import functools
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     loop = asyncio.get_event_loop()
     recent_ctx = await loop.run_in_executor(None, _fetch_recent_context_sync)
-    full_content = (recent_ctx + content) if recent_ctx else content
+
+    # 이전 게시글 기반 코인별 활성 시나리오 컨텍스트
+    coin_ctx = ""
+    if post_db_id:
+        coin_ctx_fn = functools.partial(_fetch_coin_active_context_sync, post_db_id)
+        coin_ctx = await loop.run_in_executor(None, coin_ctx_fn)
+
+    full_content = (recent_ctx + coin_ctx + content) if (recent_ctx or coin_ctx) else content
 
     if image_urls:
         user_content: list = [{"type": "text", "text": full_content}]
@@ -966,7 +1126,9 @@ async def _process(msg_value: bytes) -> None:
 
     print(f"[analyzer] 분석 시작: post_id={post_db_id}, 이미지 {len(image_urls)}개")
 
-    analyses, market_indicators = await _analyze_with_gpt(post["content"], image_urls=image_urls)
+    analyses, market_indicators = await _analyze_with_gpt(
+        post["content"], image_urls=image_urls, post_db_id=post_db_id
+    )
     print(f"[analyzer] 분석 결과: {len(analyses)}개 시나리오")
 
     # 시장 지표 저장 (게시글당 1번)
