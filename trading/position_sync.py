@@ -200,7 +200,7 @@ async def sync_analysis(analysis_id: int) -> None:
     entry_prices = [float(p) for p in [e1, e2, e3, e4] if p]
     labels = ["안정형", "중립형", "공격형", "초공격형"]
 
-    side_str = "Buy" if signal == "BUY" else "Sell"
+    side_str = "BUY" if signal == "BUY" else "SELL"
     symbol = f"{coin}USDT"
 
     def _fmt(v):

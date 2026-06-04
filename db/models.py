@@ -269,6 +269,26 @@ class Position(Base):
     trades: Mapped[list[Trade]] = relationship("Trade", back_populates="position")
 
 
+class MacroRule(Base):
+    """유튜버가 제시한 조건부 거시 방향성 규칙.
+    예: 'USDT.D 7.83 이상 종가 마감 → BTC 주봉 하락 시나리오'
+    """
+    __tablename__ = "macro_rules"
+
+    id               : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    analysis_id      : Mapped[Optional[int]]     = mapped_column(BigInteger, ForeignKey("analyses.id", ondelete="CASCADE"), nullable=True)
+    trigger_coin     : Mapped[str]               = mapped_column(String(20), nullable=False)   # "USDT.D"
+    trigger_cond     : Mapped[str]               = mapped_column(String(20), nullable=False)   # "CLOSE_ABOVE"
+    trigger_level    : Mapped[Decimal]           = mapped_column(Numeric(18, 4), nullable=False)  # 7.83
+    result_coin      : Mapped[str]               = mapped_column(String(20), nullable=False)   # "BTC"
+    result_direction : Mapped[str]               = mapped_column(String(10), nullable=False)   # "BEARISH"
+    result_timeframe : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)    # "WEEKLY"
+    result_target    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    is_active        : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
+    description      : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    created_at       : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+
+
 class MarketContext(Base):
     __tablename__ = "market_context"
     __table_args__ = (
@@ -284,6 +304,24 @@ class MarketContext(Base):
     implication: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     summary    : Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at : Mapped[datetime]      = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
+
+
+class CustomAlert(Base):
+    """사용자가 /alert 명령으로 직접 등록하는 수동 가격 알림."""
+    __tablename__ = "custom_alerts"
+    __table_args__ = (
+        CheckConstraint("direction IN ('ABOVE','BELOW')", name="custom_alerts_direction_check"),
+        CheckConstraint("status IN ('PENDING','TRIGGERED','CANCELLED')", name="custom_alerts_status_check"),
+    )
+
+    id           : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    coin_symbol  : Mapped[str]               = mapped_column(String(20), nullable=False)
+    target_price : Mapped[Decimal]           = mapped_column(Numeric(18, 2), nullable=False)
+    direction    : Mapped[str]               = mapped_column(String(10), nullable=False)   # 'ABOVE' | 'BELOW'
+    note         : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
+    status       : Mapped[str]               = mapped_column(String(10), nullable=False, server_default=text("'PENDING'"))
+    triggered_at : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
+    created_at   : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
 
 class EconomicCalendar(Base):

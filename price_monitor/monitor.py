@@ -86,6 +86,29 @@ def _db_connect():
     )
 
 
+def _ensure_custom_alerts_table() -> None:
+    """custom_alerts 테이블이 없으면 생성한다."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS custom_alerts (
+                    id           BIGSERIAL PRIMARY KEY,
+                    coin_symbol  VARCHAR(20)    NOT NULL,
+                    target_price NUMERIC(18,2)  NOT NULL,
+                    direction    VARCHAR(10)    NOT NULL CHECK (direction IN ('ABOVE','BELOW')),
+                    note         TEXT,
+                    status       VARCHAR(10)    NOT NULL DEFAULT 'PENDING'
+                                 CHECK (status IN ('PENDING','TRIGGERED','CANCELLED')),
+                    triggered_at TIMESTAMP,
+                    created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _get_user_entry_type() -> str:
     """사용자 risk_tolerance에 맞는 ENTRY 타입을 반환한다. 기본값 ENTRY_2(중립형)."""
     if not TELEGRAM_CHAT_ID:
@@ -195,6 +218,44 @@ def _trigger_alert_db(alert_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE price_alerts
+                SET status = 'TRIGGERED', triggered_at = NOW()
+                WHERE id = %s AND status = 'PENDING'
+            """, (alert_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_custom_alerts() -> list[dict]:
+    """수동 등록된 PENDING custom_alerts 조회."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, coin_symbol, target_price, direction, note
+                FROM custom_alerts WHERE status = 'PENDING'
+            """)
+            return [
+                {
+                    "id":           row[0],
+                    "coin_symbol":  row[1],
+                    "target_price": float(row[2]),
+                    "direction":    row[3],
+                    "note":         row[4],
+                    "is_custom":    True,
+                }
+                for row in cur.fetchall()
+            ]
+    finally:
+        conn.close()
+
+
+def _trigger_custom_alert_db(alert_id: int) -> None:
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE custom_alerts
                 SET status = 'TRIGGERED', triggered_at = NOW()
                 WHERE id = %s AND status = 'PENDING'
             """, (alert_id,))
@@ -433,11 +494,12 @@ def _should_trigger(current_price: float, alert: dict) -> bool:
 
 class PriceMonitor:
     def __init__(self) -> None:
-        self._alerts: list[dict]       = []
-        self._prices: dict[str, float] = {}
-        self._subscribed: set[str]     = set()
-        self._ws                       = None
-        self._last_reload: float       = 0.0
+        self._alerts: list[dict]        = []
+        self._custom_alerts: list[dict] = []   # 수동 등록 알림
+        self._prices: dict[str, float]  = {}
+        self._subscribed: set[str]      = set()
+        self._ws                        = None
+        self._last_reload: float        = 0.0
         self._trigger_queue: asyncio.Queue | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -469,6 +531,20 @@ class PriceMonitor:
                     self._trigger_queue.put_nowait, (alert, price)
                 )
 
+        # 수동 등록 알림 체크
+        for ca in self._custom_alerts[:]:
+            if ca["coin_symbol"] != coin:
+                continue
+            if _is_already_sent(f"custom_{ca['id']}"):
+                continue
+            hit = (ca["direction"] == "ABOVE" and price >= ca["target_price"]) or \
+                  (ca["direction"] == "BELOW" and price <= ca["target_price"])
+            if hit:
+                _mark_as_sent(f"custom_{ca['id']}")
+                self._loop.call_soon_threadsafe(
+                    self._trigger_queue.put_nowait, (ca, price)
+                )
+
     # ── 트리거 처리 루프 ──────────────────────────────────────
 
     async def _process_triggers(self) -> None:
@@ -482,7 +558,23 @@ class PriceMonitor:
     async def _fire_alert(self, alert: dict, price: float) -> None:
         loop = asyncio.get_event_loop()
 
-        # DB 업데이트 + 분석 컨텍스트 조회
+        # 수동 알림 처리
+        if alert.get("is_custom"):
+            await loop.run_in_executor(None, _trigger_custom_alert_db, alert["id"])
+            self._custom_alerts = [a for a in self._custom_alerts if a["id"] != alert["id"]]
+
+            direction = alert["direction"]
+            dir_label = "🔼 상향 돌파" if direction == "ABOVE" else "🔽 하향 이탈"
+            text = (
+                f"🔔 *가격 알림 도달!*\n"
+                f"{alert['coin_symbol']} {alert['target_price']:,.2f} {dir_label}\n"
+                f"현재가: {price:,.2f}"
+            )
+            await _send_telegram(text)
+            print(f"[monitor] 수동알림 발송: {alert['coin_symbol']} {direction} {alert['target_price']} @ {price}")
+            return
+
+        # 기존 분석 기반 알림
         await loop.run_in_executor(None, _trigger_alert_db, alert["id"])
         ctx = await loop.run_in_executor(None, _fetch_analysis_context, alert["analysis_id"])
 
@@ -504,9 +596,10 @@ class PriceMonitor:
         for p in promoted:
             print(f"[monitor] PENDING_SLOT → PENDING: {p['coin_symbol']} {p['alert_type']}")
 
-        self._alerts = _load_pending_alerts()
+        self._alerts        = _load_pending_alerts()
+        self._custom_alerts = _load_custom_alerts()
 
-        new_coins = {a["coin_symbol"] for a in self._alerts} - self._subscribed
+        new_coins = {a["coin_symbol"] for a in self._alerts + self._custom_alerts} - self._subscribed
         for coin in new_coins:
             symbol = f"{coin}USDT"
             try:
@@ -529,6 +622,7 @@ class PriceMonitor:
         self._ws            = WebSocket(testnet=BYBIT_TESTNET, channel_type="linear")
 
         loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _ensure_custom_alerts_table)
         await loop.run_in_executor(None, self._reload)
 
         asyncio.create_task(self._process_triggers())
