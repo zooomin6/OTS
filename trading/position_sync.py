@@ -203,6 +203,27 @@ async def sync_analysis(analysis_id: int) -> None:
     side_str = "BUY" if signal == "BUY" else "SELL"
     symbol = f"{coin}USDT"
 
+    # 청산 가드 (레버 상한 자동 하향 + 청산가 vs 최저지지)
+    from trading.risk_manager import RiskManager
+    _rm  = RiskManager()
+    _cap = _rm.leverage_cap(coin)
+    if leverage > _cap:
+        await _send_telegram(f"⚠️ *{coin} 레버리지 {leverage}x → {_cap}x 자동 하향*\n청산빔 안전상한 적용.")
+        leverage = _cap
+    if signal == "BUY" and entry_prices:
+        _ratios = [0.40, 0.35, 0.25, 0.0][:len(entry_prices)]
+        _planned_avg = (sum(r for r in _ratios if r > 0) or 1.0) / sum(
+            (r / p) for r, p in zip(_ratios, entry_prices) if r > 0
+        )
+        _supports = [float(v) for v in ([abs_stop] + entry_prices) if v]
+        _liq = _rm.check_liquidation(
+            coin, leverage, avg_entry=_planned_avg,
+            lowest_support=(min(_supports) if _supports else None), side="LONG",
+        )
+        if not _liq:
+            await _send_telegram(f"🛑 *청산 가드 차단 — {coin}*\n{_liq.reason}")
+            return
+
     def _fmt(v):
         if v is None: return "-"
         return f"{v:,.0f}" if float(v) >= 1000 else f"{float(v):,.4f}"
