@@ -305,6 +305,24 @@ def _get_user_leverage() -> int:
         conn.close()
 
 
+def _get_lowest_support(analysis_id: int) -> float | None:
+    """유튜버 최저 지지 = absolute_stop / entry_price_3 / youtuber_zone_low 중 최저값."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT absolute_stop, entry_price_3, youtuber_zone_low
+                FROM analyses WHERE id = %s
+            """, (analysis_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            vals = [float(v) for v in row if v is not None]
+            return min(vals) if vals else None
+    finally:
+        conn.close()
+
+
 # ── Telegram ──────────────────────────────────────────────────
 
 async def _send_telegram(text: str) -> None:
@@ -543,16 +561,42 @@ async def _execute_alert(alert: dict, mode: str) -> None:
     else:
         usdt_amount = _calc_entry_usdt(coin, balance_usdt)
 
+    rm = RiskManager()
+
+    # 청산 가드 1: 레버리지 안전상한 초과 시 자동 하향
+    cap = rm.leverage_cap(coin)
+    if leverage > cap:
+        await _send_telegram(
+            f"⚠️ *{coin} 레버리지 {leverage}x → {cap}x 자동 하향*\n청산빔 안전상한 적용."
+        )
+        leverage = cap
+
     qty       = _calc_qty(usdt_amount, price, leverage)
     trade_krw = int(usdt_amount * 1350)
 
-    # 리스크 체크
-    rm     = RiskManager()
+    # 리스크 체크 (정지/포지션수/거래한도/일일손실)
     result = rm.check(trade_krw, is_new_position=not is_add_buy, signal_type=signal)
     if not result:
         await _send_telegram(f"⚠️ *리스크 체크 실패 — {coin}*\n{result.reason}")
         _mark_alert_processed(alert["id"])
         return
+
+    # 청산 가드 2: 청산가가 유튜버 최저 지지보다 위면 차단 (롱)
+    if signal == "BUY":
+        lowest_support = await loop.run_in_executor(None, _get_lowest_support, analysis_id)
+        if is_add_buy and existing:
+            proj_avg = (
+                existing["avg_entry_price"] * existing["current_qty"] + price * qty
+            ) / (existing["current_qty"] + qty)
+        else:
+            proj_avg = price
+        liq_res = rm.check_liquidation(
+            coin, leverage, avg_entry=proj_avg, lowest_support=lowest_support, side="LONG",
+        )
+        if not liq_res:
+            await _send_telegram(f"🛑 *청산 가드 차단 — {coin}*\n{liq_res.reason}")
+            _mark_alert_processed(alert["id"])
+            return
 
     # SEMI_AUTO — 텔레그램 버튼 대기
     if mode == "SEMI_AUTO":

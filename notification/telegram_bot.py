@@ -813,6 +813,105 @@ async def _cmd_memos(update, context) -> None:
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def _cmd_alert(update, context) -> None:
+    """/alert [코인] [가격] [up|down] — 가격 알림 등록.
+    예) /alert BTC 74200       → 74200 상향 돌파 시 알림
+        /alert ETH 2000 down   → 2000 하향 이탈 시 알림
+    """
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "사용법:\n"
+            "/alert BTC 74200       (상향 돌파 알림)\n"
+            "/alert ETH 2000 down   (하향 이탈 알림)"
+        )
+        return
+
+    coin = args[0].upper()
+    try:
+        price = float(args[1].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("가격 형식이 올바르지 않습니다.")
+        return
+
+    direction_raw = args[2].lower() if len(args) > 2 else "up"
+    direction = "BELOW" if direction_raw in ("down", "below", "아래") else "ABOVE"
+    dir_label = "🔽 하향 이탈" if direction == "BELOW" else "🔼 상향 돌파"
+
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO custom_alerts (coin_symbol, target_price, direction)
+                VALUES (%s, %s, %s) RETURNING id
+            """, (coin, price, direction))
+            alert_id = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    await update.message.reply_text(
+        f"✅ 알림 등록 완료 (#{alert_id})\n"
+        f"{coin} {price:,.2f} {dir_label} 시 알림"
+    )
+
+
+async def _cmd_alerts(update, context) -> None:
+    """/alerts — 등록된 PENDING 알림 목록."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, coin_symbol, target_price, direction, created_at
+                FROM custom_alerts WHERE status = 'PENDING'
+                ORDER BY created_at DESC LIMIT 10
+            """)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        await update.message.reply_text("등록된 알림이 없습니다.")
+        return
+
+    lines = ["🔔 *대기 중인 알림*\n"]
+    for r in rows:
+        aid, coin, price, direction, created = r
+        dir_label = "🔼 상향" if direction == "ABOVE" else "🔽 하향"
+        lines.append(f"#{aid} {coin} {float(price):,.2f} {dir_label}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def _cmd_cancelalert(update, context) -> None:
+    """/cancelalert [id] — 알림 취소."""
+    if not context.args:
+        await update.message.reply_text("사용법: /cancelalert [알림번호]")
+        return
+    try:
+        alert_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("번호가 올바르지 않습니다.")
+        return
+
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE custom_alerts SET status = 'CANCELLED'
+                WHERE id = %s AND status = 'PENDING' RETURNING coin_symbol, target_price
+            """, (alert_id,))
+            row = cur.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+
+    if row:
+        await update.message.reply_text(f"❌ #{alert_id} 알림 취소됨 ({row[0]} {float(row[1]):,.2f})")
+    else:
+        await update.message.reply_text("해당 알림을 찾을 수 없습니다.")
+
+
 async def _cmd_links(update, context) -> None:
     """/links [코인] — 최근 트레이딩뷰 차트 링크를 보여준다."""
     coin = context.args[0].upper() if context.args else None
@@ -1007,8 +1106,186 @@ def _save_feedback(analysis_id: int, feedback: str, note: str | None) -> None:
         conn.close()
 
 
+# ── 시장 분석 명령어 ──────────────────────────────────────────
+
+_COIN_KEYWORDS: dict[str, list[str]] = {
+    "BTC":    ["btc", "비트", "비트코인", "bitcoin"],
+    "ETH":    ["eth", "이더", "이더리움", "ethereum"],
+    "SOL":    ["sol", "솔라나", "solana"],
+    "XRP":    ["xrp", "리플", "ripple"],
+    "USDT.D": ["테더", "usdt.d", "테더도미넌스", "tether"],
+}
+_MARKET_TRIGGERS = ["어때", "분석", "시장", "봐줘", "살까", "팔까", "들어갈까", "어디서", "지금"]
+
+
+def _detect_market_query(text: str) -> str | None:
+    """메시지에서 코인 + 시장 질문을 감지하면 코인 심볼 반환, 없으면 None."""
+    lower = text.lower()
+    if not any(t in lower for t in _MARKET_TRIGGERS):
+        return None
+    for coin, keywords in _COIN_KEYWORDS.items():
+        if any(k in lower for k in keywords):
+            return coin
+    return None
+
+
+def _register_custom_alert_db(coin: str, price: float, direction: str, note: str) -> int:
+    """custom_alerts 테이블에 수동 알림 등록 후 id 반환."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO custom_alerts (coin_symbol, target_price, direction, note)
+                VALUES (%s, %s, %s, %s) RETURNING id
+            """, (coin, round(price, 2), direction, note))
+            alert_id = cur.fetchone()[0]
+        conn.commit()
+        return alert_id
+    finally:
+        conn.close()
+
+
+def _has_open_position(coin: str) -> bool:
+    """해당 코인의 OPEN 포지션이 있으면 True."""
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM positions WHERE coin_symbol = %s AND status = 'OPEN'",
+                (coin,)
+            )
+            return cur.fetchone()[0] > 0
+    finally:
+        conn.close()
+
+
+def _format_market_analysis(result: dict, coin: str) -> str:
+    """시장 분석 결과를 텔레그램 메시지로 포맷."""
+    trend_emoji = {"UPTREND": "📈", "DOWNTREND": "📉", "SIDEWAYS": "➡️"}.get(
+        result.get("trend", ""), "📊"
+    )
+    trend_label = {"UPTREND": "상승 추세", "DOWNTREND": "하락 추세", "SIDEWAYS": "횡보"}.get(
+        result.get("trend", ""), "분석 중"
+    )
+
+    def _fmt(v):
+        if v is None:
+            return "-"
+        try:
+            f = float(v)
+            return f"{f:,.0f}" if f >= 100 else f"{f:,.4f}"
+        except Exception:
+            return str(v)
+
+    lines = [f"📊 *{coin} 시장 분석*\n"]
+
+    # 거시 방향성 차단 경고 (최상단 표시)
+    macro = result.get("macro_block")
+    if macro and macro.get("result_direction") == "BEARISH":
+        tf_kr = {"WEEKLY": "주봉", "MONTHLY": "월봉", "DAILY": "일봉"}.get(
+            macro.get("result_timeframe", ""), ""
+        )
+        target_str = ""
+        if macro.get("result_target"):
+            target_str = f"→ 하락 목표가: {float(macro['result_target']):,.0f}\n"
+        macro_warning = (
+            f"🚨 *[유튜버 거시 방향성 발동 중]*\n"
+            f"조건: USDT.D {float(macro['trigger_level']):.2f}% 이상 "
+            f"(현재 {float(macro['current_value']):.2f}%)\n"
+            f"→ {coin} {tf_kr} 하락 시나리오 활성\n"
+            f"{target_str}"
+            f"⛔ *이 상황에서 {coin} 롱은 거시 방향을 역행합니다*\n"
+            f"{'─' * 35}\n"
+        )
+        lines.insert(0, macro_warning)
+
+    lines.append(f"{trend_emoji} 추세: {trend_label}")
+
+    e_low  = result.get("entry_zone_low")
+    e_high = result.get("entry_zone_high")
+    if e_low and e_high:
+        lines.append(f"🎯 진입 구간: {_fmt(e_low)} ~ {_fmt(e_high)}")
+    elif e_low:
+        lines.append(f"🎯 진입가: {_fmt(e_low)}")
+    else:
+        lines.append("🎯 진입: 현재 진입 보류 (애매한 구간)")
+
+    lines.append(f"🛑 손절: {_fmt(result.get('stop_loss'))}")
+    lines.append(f"✅ 1차 목표: {_fmt(result.get('take_profit_1'))}")
+    lines.append(f"✅ 2차 목표: {_fmt(result.get('take_profit_2'))}")
+
+    if result.get("pattern"):
+        lines.append(f"\n🔍 패턴: {result['pattern']}")
+
+    ks = result.get("key_support")
+    kr = result.get("key_resistance")
+    if ks or kr:
+        lines.append(f"📌 지지: {_fmt(ks)} | 저항: {_fmt(kr)}")
+
+    # 유튜버 신호
+    youtuber = result.get("youtuber_signal")
+    if youtuber:
+        y = youtuber[0]
+        lines.append(f"\n[유튜버] {y['signal_type']} 신호 ({'✅ 일치' if result.get('entry_recommended') else '⚠️ 확인 필요'})")
+    else:
+        lines.append("\n[유튜버] 해당 코인 분석 없음 (기술적 분석만)")
+
+    if result.get("summary"):
+        lines.append(f"\n💡 {result['summary']}")
+
+    if e_low:
+        lines.append("\n🔔 진입가 도달 시 자동 알림 등록됨")
+
+    return "\n".join(lines)
+
+
+async def _cmd_market(update, context) -> None:
+    """/market [코인] — 4TF 기술적 분석 + 자동 알림 등록.
+    예) /market BTC  /market ETH
+    """
+    from analysis.market_analyzer import analyze_market
+
+    args = context.args
+    coin = args[0].upper() if args else "BTC"
+    if coin not in list(_COIN_KEYWORDS.keys()) + ["BTC", "ETH", "SOL", "XRP"]:
+        await update.message.reply_text(f"지원 코인: BTC, ETH, SOL, XRP, USDT.D")
+        return
+
+    await update.message.reply_text(f"⏳ {coin} 4타임프레임 분석 중... (10~30초 소요)")
+
+    try:
+        result = await analyze_market(coin)
+    except Exception as e:
+        await update.message.reply_text(f"❌ 분석 실패: {e}")
+        return
+
+    text = _format_market_analysis(result, coin)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+    # 진입가 custom_alert 자동 등록
+    entry = result.get("entry_zone_low")
+    if entry and result.get("entry_recommended"):
+        try:
+            _register_custom_alert_db(coin, float(entry), "BELOW", f"{coin} 자동 진입 알림")
+            await update.message.reply_text(
+                f"🔔 {coin} {float(entry):,.0f} 하향 도달 시 자동 알림 등록됨\n"
+                f"/alerts 로 확인 가능"
+            )
+        except Exception:
+            pass
+
+    # 오픈 포지션 있으면 TP 알림도 등록
+    tp1 = result.get("take_profit_1")
+    if tp1 and _has_open_position(coin):
+        try:
+            _register_custom_alert_db(coin, float(tp1), "ABOVE", f"{coin} 1차 익절 알림 (자동)")
+            await update.message.reply_text(f"🔔 {coin} {float(tp1):,.0f} 1차 익절 자동 알림 등록됨")
+        except Exception:
+            pass
+
+
 async def _handle_correction_or_chat(update, context) -> None:
-    """피드백 수정 입력 대기 중이면 수정 처리, 아니면 GPT 대화로 전달."""
+    """피드백 수정 입력 대기 중이면 수정 처리, 시장 질문이면 분석, 아니면 GPT 대화."""
     analysis_id = context.user_data.get("pending_correction")
     text = update.message.text.strip()
 
@@ -1025,6 +1302,14 @@ async def _handle_correction_or_chat(update, context) -> None:
         finally:
             conn.close()
         await update.message.reply_text(f"✅ 수정 내용 저장 완료\n_{text[:100]}_", parse_mode="Markdown")
+        return
+
+    # 시장 질문 감지 ("BTC 어때?", "이더 지금 살까?" 등)
+    detected_coin = _detect_market_query(text)
+    if detected_coin:
+        # /market 커맨드와 동일하게 처리
+        context.args = [detected_coin]
+        await _cmd_market(update, context)
         return
 
     await _handle_chat(update, context)
@@ -1553,8 +1838,12 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("links",    _cmd_links))
     app.add_handler(CommandHandler("memo",     _cmd_memo))
     app.add_handler(CommandHandler("memos",    _cmd_memos))
-    app.add_handler(CommandHandler("mode",     _cmd_mode))
-    app.add_handler(CommandHandler("status",   _cmd_status))
+    app.add_handler(CommandHandler("mode",        _cmd_mode))
+    app.add_handler(CommandHandler("status",      _cmd_status))
+    app.add_handler(CommandHandler("alert",       _cmd_alert))
+    app.add_handler(CommandHandler("alerts",      _cmd_alerts))
+    app.add_handler(CommandHandler("cancelalert", _cmd_cancelalert))
+    app.add_handler(CommandHandler("market",      _cmd_market))
 
     app.add_handler(CallbackQueryHandler(_callback_scenario, pattern="^scenario:"))
     app.add_handler(CallbackQueryHandler(_callback_setmode,  pattern="^setmode:"))

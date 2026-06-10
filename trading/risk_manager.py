@@ -18,6 +18,28 @@ load_dotenv()
 DATABASE_URL       = os.environ.get("DATABASE_URL", "")
 MAX_OPEN_POSITIONS = 2  # BTC 50% / ETH 50%
 
+# 청산 가드 (backtest/liq_sweep.py 3년치 16개 급락 통계 기반)
+#   BTC 5x ≈ 생존 88% / ETH 3x ≈ 75%. 그 이상은 청산빔 위험 급증.
+#   ETH가 BTC보다 변동성이 커서 더 낮게 잡음.
+MMR                  = 0.005             # 격리마진 유지증거금률 근사
+LEVERAGE_CAP         = {"BTC": 5, "ETH": 3}
+DEFAULT_LEVERAGE_CAP = 3                  # 기타 코인 보수적
+
+
+def liq_price_long(avg_entry: float, leverage: int, mmr: float = MMR) -> float:
+    """격리마진 롱 청산가 근사: 평단 × (1 − 1/레버 + 유지증거금률)."""
+    return avg_entry * (1 - 1.0 / leverage + mmr)
+
+
+def safe_max_leverage(avg_entry: float, lowest_support: float, mmr: float = MMR) -> int | None:
+    """청산가가 lowest_support 아래가 되는 최대 정수 레버리지."""
+    if not avg_entry or not lowest_support or lowest_support >= avg_entry:
+        return None
+    denom = 1 + mmr - (lowest_support / avg_entry)
+    if denom <= 0:
+        return 999
+    return max(1, int(1.0 / denom))
+
 
 # ── DB ────────────────────────────────────────────────────────
 
@@ -169,6 +191,45 @@ class RiskManager:
                 False,
                 f"일일 손실 한도 초과: {daily_loss:,}원 >= {daily_limit:,}원. 시스템 정지."
             )
+
+        return RiskCheckResult(True)
+
+    def leverage_cap(self, coin: str) -> int:
+        """코인별 안전 레버리지 상한."""
+        return LEVERAGE_CAP.get((coin or "").upper(), DEFAULT_LEVERAGE_CAP)
+
+    def check_liquidation(
+        self,
+        coin: str,
+        leverage: int,
+        avg_entry: float | None = None,
+        lowest_support: float | None = None,
+        side: str = "LONG",
+    ) -> RiskCheckResult:
+        """
+        청산 가드 — 주문 직전 호출.
+          1. 레버리지 안전상한 초과 차단
+          2. (롱) 청산가가 유튜버 최저 지지보다 위면 차단 (지지 닿기 전 청산 위험)
+        """
+        coin = (coin or "").upper()
+        cap = self.leverage_cap(coin)
+
+        if leverage > cap:
+            return RiskCheckResult(
+                False,
+                f"{coin} 레버리지 {leverage}x > 안전상한 {cap}x — 청산빔 위험으로 차단."
+            )
+
+        if side == "LONG" and avg_entry and lowest_support:
+            liq = liq_price_long(avg_entry, leverage)
+            if liq >= lowest_support:
+                smax = safe_max_leverage(avg_entry, lowest_support)
+                smax_txt = f" 안전 최대레버 ~{smax}x." if smax else ""
+                return RiskCheckResult(
+                    False,
+                    f"{coin} 청산가 {liq:,.0f} ≥ 유튜버 최저지지 {lowest_support:,.0f} "
+                    f"— 지지 닿기 전 청산 위험.{smax_txt}"
+                )
 
         return RiskCheckResult(True)
 

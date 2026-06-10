@@ -353,6 +353,89 @@ SYSTEM_PROMPT = """\
 → 해당 가격은 **이미 지난 구간**이므로 entry_price로 추출하지 말 것
 → 단, 게시글 내에 "앞으로" 방향의 새로운 신호가 명시되면 그것만 추출
 
+### 17. 매매 원칙 (실전 검증된 규칙)
+
+**진입 원칙:**
+- **명확한 지지선/추세선/채널 하단에서만 진입** — 중간 구간 진입 금지
+- **저점이 높아지는 구조** (higher lows) = 매수 신호. 저점이 계속 올라오면 상승 에너지 응축 중
+- **수평 지지 + 추세선 겹치는 구간** = 가장 강한 진입 자리 (confluence)
+- **저항을 여러 번 테스트** = 조만간 돌파 가능성 높음 → BUY 신호 강화
+- 가격이 이미 많이 올랐으면 **추격 금지** — 다음 조정 기다리기
+- 진입 근거(지지선/채널/유튜버 명시)가 없으면 signal_type = HOLD
+
+**삼각수렴 패턴 진입 원칙 (중요):**
+- 삼각수렴은 방향이 불확실하다 → **이탈 방향 확인 후 진입**
+- 하락 추세 중 삼각수렴 = **하방 이탈이 기본값**. 상방 돌파를 기대하고 먼저 진입하면 안 됨
+- 상위 타임프레임(4시간/일봉)이 하락 추세이면 삼각수렴 하단 반등 매수 금지
+- 삼각수렴 상방 이탈 확인 후 → 이탈한 가격 위에서 진입 (추격 아님, 확인 진입)
+
+**다이버전스 진입 원칙:**
+- 다이버전스는 반전 신호이지 반전 확정이 아님
+- 다이버전스 + 지지선 + 유튜버 신호가 모두 겹칠 때 가장 신뢰도 높음
+- 다이버전스만 단독으로는 진입 근거 부족 → 추가 조건 필요
+- 확신이 있더라도 포지션 크기로 리스크 조절 (베팅 크기 ≠ 진입 여부)
+
+**분할매수 원칙:**
+- 1차 진입 후 추가매수는 **반드시 마지노선(absolute_stop) 설정 후**
+- 마지노선 = 일봉 종가 기준 이탈 시 전체 손절 → 명확히 추출할 것
+- 추세선 이탈은 추가매수 자리일 수 있음 (손절 기준 아님)
+- 손절 없이 추가매수 = 절대 금지
+
+**손절 원칙:**
+- 손절 기준은 항상 **일봉 종가 기준** (장중 위크는 손절 아님)
+- 진입 근거가 된 지지선/추세선이 일봉 종가로 이탈 → 즉시 손절
+- 손절이 명확할수록 포지션 크기 자신감 있게 잡을 수 있음
+- 지지선이 무너지면 "무조건" 지지라고 했던 곳도 손절 — "무조건"은 없음
+- 손절 있어야 추가매수도 의미 있음
+
+**놓친 기회 대응:**
+- 진입 주문이 미체결되고 가격이 올라갔으면 → **추격 금지**
+- 다음 조정 구간(이전 저항 → 지지 전환 구간)에서 새 진입 기다리기
+- 놓친 기회를 쫓는 것보다 다음 기회를 기다리는 것이 항상 옳음
+
+**상위 타임프레임 추세 원칙:**
+- 4시간봉/일봉이 하락 추세이면 → 단기 반등 매수는 소량만, 큰 포지션 금지
+- 하락 추세 중 지지선 = 참고 기준이지 절대 기준이 아님 (무너질 수 있음)
+- 상위 TF 추세를 이기는 단기 신호는 없음 → 추세 확인이 먼저
+
+### 18. 조건부 거시 방향성 추출 (최우선 처리)
+
+유튜버가 아래 패턴을 제시하면 **반드시** `macro_rules` 배열을 추출하세요:
+
+**인식 패턴:**
+- "A가 X 이상/이하 [종가] 마감하면 → B는 [주봉/월봉] C 방향"
+- "A가 X를 넘으면/깨지면 → B [주봉] 시나리오"
+- "테더가 X 위로 올라가면 → 비트 주봉으로 봐야 한다"
+
+**예시:**
+"USDT.D가 7.83 이상 종가 마감하면 BTC 주봉 하락 시나리오"
+→ trigger_coin="USDT.D", trigger_cond="CLOSE_ABOVE", trigger_level=7.83,
+  result_coin="BTC", result_direction="BEARISH", result_timeframe="WEEKLY"
+
+**응답 JSON 최상위에 macro_rules 배열 추가:**
+```
+"macro_rules": [
+  {
+    "trigger_coin": "USDT.D",
+    "trigger_cond": "CLOSE_ABOVE" | "CLOSE_BELOW" | "BREAK_ABOVE" | "BREAK_BELOW",
+    "trigger_level": 7.83,
+    "result_coin": "BTC",
+    "result_direction": "BEARISH" | "BULLISH",
+    "result_timeframe": "WEEKLY" | "MONTHLY" | "DAILY",
+    "result_target": 숫자 또는 null,
+    "description": "원문 한 줄 요약"
+  }
+]
+```
+
+**이 규칙이 있을 때 처리 원칙:**
+- 해당 result_coin의 BUY entry_price를 절대 제시하지 말 것
+- 조건 충족 = 방향이 정해진 것 → "매수 타이밍 탐색"이 아니라 "방향 경고"
+- signal_type은 HOLD 또는 SELL로 처리
+- summary에 "거시 방향성 규칙 발동 시 [result_coin] [result_direction] — 롱 진입 금지" 명시
+
+거시 방향성이 한번 발동되면 result_coin의 신규 매수 신호는 무효화됨을 인지할 것.
+
 ### 13. 차트 레이블 전용 게시글 처리
 
 **텍스트에 구체적 가격 숫자가 없고 차트 레이블(A, B, C, 주황박스 등)만 언급된 경우**:
@@ -489,6 +572,58 @@ def _calc_expires_at(timeframe: str | None) -> str | None:
     if timeframe == "HOURLY":
         return "NOW() + INTERVAL '24 hours'"
     return None  # MONTHLY / WEEKLY / None → 만료 없음
+
+
+def _save_macro_rules_sync(analysis_id: int, rules: list[dict]) -> None:
+    """GPT가 추출한 거시 방향성 규칙을 macro_rules 테이블에 저장."""
+    if not rules:
+        return
+    conn = _db_connect()
+    try:
+        with conn.cursor() as cur:
+            # 테이블 없으면 생성
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS macro_rules (
+                    id               BIGSERIAL PRIMARY KEY,
+                    analysis_id      BIGINT REFERENCES analyses(id) ON DELETE CASCADE,
+                    trigger_coin     VARCHAR(20) NOT NULL,
+                    trigger_cond     VARCHAR(20) NOT NULL,
+                    trigger_level    NUMERIC(18,4) NOT NULL,
+                    result_coin      VARCHAR(20) NOT NULL,
+                    result_direction VARCHAR(10) NOT NULL,
+                    result_timeframe VARCHAR(10),
+                    result_target    NUMERIC(18,2),
+                    is_active        BOOLEAN DEFAULT TRUE,
+                    description      TEXT,
+                    created_at       TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            for rule in rules:
+                try:
+                    cur.execute("""
+                        INSERT INTO macro_rules
+                        (analysis_id, trigger_coin, trigger_cond, trigger_level,
+                         result_coin, result_direction, result_timeframe, result_target, description)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        analysis_id,
+                        rule.get("trigger_coin", ""),
+                        rule.get("trigger_cond", "CLOSE_ABOVE"),
+                        float(rule.get("trigger_level", 0)),
+                        rule.get("result_coin", "BTC"),
+                        rule.get("result_direction", "BEARISH"),
+                        rule.get("result_timeframe"),
+                        float(rule["result_target"]) if rule.get("result_target") else None,
+                        rule.get("description", ""),
+                    ))
+                    print(f"[analyzer] 거시규칙 저장: {rule.get('trigger_coin')} "
+                          f"{rule.get('trigger_cond')} {rule.get('trigger_level')} "
+                          f"→ {rule.get('result_coin')} {rule.get('result_direction')}")
+                except Exception as e:
+                    print(f"[analyzer] 거시규칙 저장 실패: {e}")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _save_analysis_sync(
@@ -922,6 +1057,7 @@ async def _analyze_with_gpt(
 
     parsed = json.loads(raw)
     market_indicators = parsed.get("market_indicators", {})
+    macro_rules_raw   = parsed.get("macro_rules", [])
 
     analyses_raw = parsed.get("analyses")
     if analyses_raw and isinstance(analyses_raw, list):
@@ -930,7 +1066,7 @@ async def _analyze_with_gpt(
         # 구형 단일 객체 포맷 fallback
         analyses = [_parse_analysis_item(parsed, raw)]
 
-    return analyses, market_indicators
+    return analyses, market_indicators, macro_rules_raw
 
 
 # ── Telegram ─────────────────────────────────────────────────
@@ -1126,7 +1262,7 @@ async def _process(msg_value: bytes) -> None:
 
     print(f"[analyzer] 분석 시작: post_id={post_db_id}, 이미지 {len(image_urls)}개")
 
-    analyses, market_indicators = await _analyze_with_gpt(
+    analyses, market_indicators, macro_rules_raw = await _analyze_with_gpt(
         post["content"], image_urls=image_urls, post_db_id=post_db_id
     )
     print(f"[analyzer] 분석 결과: {len(analyses)}개 시나리오")
@@ -1181,6 +1317,11 @@ async def _process(msg_value: bytes) -> None:
         )
         analysis_id = await loop.run_in_executor(None, save_fn)
         print(f"[analyzer] 저장 완료: analysis_id={analysis_id}")
+
+        # 거시 방향성 규칙 저장
+        if macro_rules_raw:
+            macro_fn = functools.partial(_save_macro_rules_sync, analysis_id, macro_rules_raw)
+            await loop.run_in_executor(None, macro_fn)
 
         if result["coin_symbol"] and not result["is_reference_only"]:
             alerts_fn = functools.partial(

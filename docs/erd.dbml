@@ -1,0 +1,201 @@
+// =============================================================
+// OTS — 데이터 모델 ERD (dbdiagram.io 용 DBML)
+// 사용법: https://dbdiagram.io → 새 다이어그램 → 이 내용 붙여넣기
+// init.sql(초기 스키마) 역설계 + 실제 코드 사용현황 반영 · 2026-06-08
+//
+// 태그 범례:
+//   [DEAD]   = 코드 참조 0 또는 폐기 마이그레이션 존재 → 삭제 대상
+//   [ZOMBIE] = DB에 저장은 되지만 매매/조회 로직에서 안 읽힘 → 정리 후보
+//   (그 외 = 사용 중)
+// =============================================================
+
+// ───────────── 핵심 파이프라인 ─────────────
+// posts → analyses → price_alerts → positions → trades
+
+Table posts {
+  id bigint [pk]
+  channel_id varchar(100) [not null]
+  post_id varchar(255) [not null, unique, note: '유튜브 게시글 고유 ID (중복 방지)']
+  content text [not null]
+  post_type varchar(10) [not null, note: 'text | video | mixed']
+  image_urls jsonb [not null]
+  content_hash varchar(64) [note: '[DEAD] 코드 참조 0 — 삭제 안전']
+  published_at timestamp [not null]
+  collected_at timestamp [not null]
+}
+
+Table analyses {
+  id bigint [pk]
+  post_id bigint [not null, ref: > posts.id]
+  signal_type varchar(10) [not null, note: 'BUY | SELL | HOLD']
+  coin_symbol varchar(20)
+  timeframe varchar(10) [note: 'MONTHLY | WEEKLY | DAILY | HOURLY']
+  is_reference_only boolean [not null, note: 'MONTHLY/WEEKLY=true (매매 안 함)']
+  youtuber_zone_low decimal
+  youtuber_zone_high decimal
+  entry_price_1 decimal [note: '안정형']
+  entry_price_2 decimal [note: '중립형']
+  entry_price_3 decimal [note: '공격형']
+  entry_price_4 decimal [note: '초공격형 — 14곳 사용중! (pending.md는 삭제하라 했으나 실제론 살아있음)']
+  entry_ratio_1 smallint [note: '[DEAD] v7_drop_entry_ratio 마이그레이션 대상']
+  entry_ratio_2 smallint [note: '[DEAD]']
+  entry_ratio_3 smallint [note: '[DEAD]']
+  absolute_stop decimal [note: '마지노선 (시즌 종료 레벨)']
+  stop_loss_price decimal
+  take_profit_price decimal
+  short_entry_price decimal [note: 'SELL 신호 숏 진입']
+  short_stop_loss decimal
+  risk_reward_ratio decimal
+  current_rsi decimal
+  rsi_signal varchar(10) [note: 'OVERSOLD | NEUTRAL | OVERBOUGHT']
+  volume_signal varchar(10) [note: '[ZOMBIE] GPT가 저장만, 매매서 안 읽힘']
+  fib_level decimal [note: '[ZOMBIE] 저장만 (signal_engine의 fib_level 변수는 별개로 사용중)']
+  scenario_json jsonb [not null]
+  summary text
+  invalidation text
+  raw_response text
+  feedback varchar(20) [note: 'CORRECT | INCORRECT (수동/AUTO)']
+  feedback_note text
+  is_active boolean [not null]
+  expires_at timestamp [note: 'DAILY=+5일, HOURLY=+24h, M/W=NULL']
+  created_at timestamp [not null]
+  feedback_source varchar(10) [note: '※ init.sql엔 없음 — backtest/runner.py가 ALTER로 추가 (MANUAL|AUTO)']
+  virtual_pnl_pct decimal [note: '※ 마이그레이션 추가 — 가상 백테스트 손익']
+  virtual_trade_json jsonb [note: '※ 마이그레이션 추가']
+}
+
+Table price_alerts {
+  id bigint [pk]
+  analysis_id bigint [not null, ref: > analyses.id]
+  coin_symbol varchar(20) [not null]
+  target_price decimal [not null]
+  alert_type varchar(20) [not null, note: 'ENTRY_1~4 | STOP_LOSS | ABSOLUTE_STOP | TAKE_PROFIT(_2) | SHORT_ENTRY']
+  status varchar(20) [not null, note: 'PENDING | PENDING_SLOT | TRIGGERED | CANCELLED']
+  triggered_at timestamp
+  created_at timestamp [not null]
+}
+
+Table positions {
+  id bigint [pk]
+  analysis_id bigint [not null, ref: > analyses.id]
+  coin_symbol varchar(20) [not null]
+  side varchar(10) [not null, note: 'LONG | SHORT']
+  avg_entry_price decimal [not null]
+  initial_capital_usdt decimal [not null, note: '추가매수 금액 계산 기준']
+  leverage smallint [not null, note: '진입 당시 레버리지 스냅샷']
+  current_qty decimal [not null]
+  current_stop_loss decimal
+  current_take_profit_1 decimal
+  current_take_profit_2 decimal
+  tp1_executed boolean [not null]
+  add_buy_count smallint [not null]
+  bybit_position_idx smallint [note: '0=롱, 1=숏 (hedge mode)']
+  status varchar(10) [not null, note: 'OPEN | CLOSED']
+  opened_at timestamp [not null]
+  closed_at timestamp
+}
+
+Table trades {
+  id bigint [pk]
+  analysis_id bigint [not null, ref: > analyses.id]
+  position_id bigint [ref: > positions.id]
+  symbol varchar(20) [not null]
+  side varchar(10) [not null, note: 'BUY | SELL']
+  qty decimal [not null]
+  price decimal
+  status varchar(20) [not null, note: 'PENDING | FILLED | FAILED | CANCELLED']
+  bybit_order_id varchar(100)
+  stop_loss_price decimal
+  mode varchar(20) [not null, note: 'AUTO | SEMI_AUTO | MANUAL']
+  executed_at timestamp
+}
+
+Table post_links {
+  id bigint [pk]
+  post_id bigint [not null, ref: > posts.id]
+  url text [not null]
+  link_type varchar(20) [not null, note: 'tradingview | youtube | other']
+  created_at timestamp [not null]
+}
+
+// ───────────── 독립 테이블 ─────────────
+
+Table video_memos {
+  id bigint [pk, note: '[DEAD] 테이블 전체 코드 참조 0 — 삭제 안전']
+  post_id bigint [ref: > posts.id]
+  content text [not null]
+  created_at timestamp [not null]
+}
+
+Table news_articles {
+  id bigint [pk]
+  source varchar(50) [not null]
+  external_id varchar(255) [unique]
+  title text [not null]
+  summary text
+  url text [not null]
+  published_at timestamp [not null]
+  sentiment varchar(10) [note: 'BULLISH | BEARISH | NEUTRAL']
+  impact_level varchar(10) [note: 'HIGH | MEDIUM | LOW']
+  related_coins jsonb [not null]
+  gpt_analysis text
+  is_processed boolean [not null]
+  collected_at timestamp [not null]
+}
+
+Table user_profiles {
+  id bigint [pk]
+  telegram_user_id bigint [not null, unique]
+  telegram_username varchar(100)
+  risk_tolerance varchar(20) [not null, note: 'CONSERVATIVE | MODERATE | AGGRESSIVE']
+  total_asset_krw bigint
+  leverage smallint [not null, note: '1~50']
+  leverage_config jsonb [not null, note: '코인별 레버리지 {BTC:5, ETH:3}']
+  trading_mode varchar(20) [not null, note: 'AUTO | SEMI_AUTO | MANUAL | NOTIFY_ONLY']
+  auto_ratio smallint [not null]
+  preferred_coins jsonb [not null]
+  onboarding_completed boolean [not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table settings {
+  id int [pk, note: '항상 1행 고정']
+  mode varchar(20) [not null, note: 'AUTO | SEMI_AUTO | MANUAL']
+  max_trade_amount_krw int [not null]
+  daily_loss_limit_krw int [not null]
+  stop_loss_pct decimal [not null]
+  is_halted boolean [not null, note: '일일 손실 한도 초과 시 true']
+  updated_at timestamp [not null]
+}
+
+Table daily_stats {
+  id bigint [pk]
+  date date [not null, unique]
+  total_trades int [not null]
+  realized_pnl_krw int [not null]
+  is_halted boolean [not null]
+}
+
+Table economic_calendars {
+  id bigint [pk]
+  source varchar(50) [not null]
+  external_id varchar(255) [unique]
+  event_name text [not null]
+  event_date date [not null]
+  event_time time
+  importance varchar(10) [not null, note: 'HIGH | MEDIUM | LOW']
+  description text
+  created_at timestamp [not null]
+}
+
+Table market_context {
+  id bigint [pk]
+  post_id bigint [ref: > posts.id]
+  indicator varchar(20) [not null, note: '예: USDT.D, BTC.D']
+  state varchar(50)
+  key_level text
+  implication text
+  summary text
+  created_at timestamp [not null]
+}
