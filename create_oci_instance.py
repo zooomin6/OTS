@@ -33,7 +33,7 @@ SHAPE              = "VM.Standard.A1.Flex"
 OCPUS              = int(os.environ.get("OCI_OCPUS", "4"))
 MEMORY_GB          = int(os.environ.get("OCI_MEMORY_GB", "24"))
 BOOT_VOLUME_GB     = int(os.environ.get("OCI_BOOT_GB", "100"))
-RETRY_INTERVAL     = 10  # 로컬 무한 모드에서 재시도 간격(초)
+RETRY_INTERVAL     = int(os.environ.get("OCI_RETRY_INTERVAL", "10"))  # 재시도 간격(초)
 
 # 로컬 모드 fallback 경로 (CI에선 env로 대체됨)
 OCI_CONFIG_FILE = os.path.expanduser(os.environ.get("OCI_CONFIG_FILE", r"C:\Users\sotus\.oci\config"))
@@ -119,7 +119,9 @@ def try_create(compute_client, ad, image_id, ssh_key):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true",
-                    help="AD 한 바퀴만 시도 후 종료 (CI/cron용). 미지정 시 무한 재시도(로컬).")
+                    help="AD 한 바퀴만 시도 후 종료. 미지정 시 무한 재시도(로컬).")
+    ap.add_argument("--max-seconds", type=int, default=0,
+                    help="이 시간(초)만 재시도 후 종료 (CI/cron용). 0=무제한.")
     args = ap.parse_args()
 
     config = build_config()
@@ -137,6 +139,7 @@ def main():
     image_id = get_ubuntu_arm_image_id(compute_client)
     print(f"ADs={ads} / image={image_id}")
 
+    start_t = time.time()
     i = 0
     while True:
         ad = ads[i % len(ads)]
@@ -157,7 +160,9 @@ def main():
             if "Out of host capacity" in msg or e.status in (429, 500):
                 print("out of capacity")
                 if args.once and i >= len(ads):
-                    # CI 모드: AD 한 바퀴 다 돌았으면 종료 (cron이 다음에 재시도)
+                    sys.exit(0)
+                if args.max_seconds and (time.time() - start_t) >= args.max_seconds:
+                    print(f"max-seconds({args.max_seconds}s) 도달 — 종료 (cron이 재시도)")
                     sys.exit(0)
                 if not args.once:
                     time.sleep(RETRY_INTERVAL)
