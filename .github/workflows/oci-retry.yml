@@ -1,0 +1,36 @@
+name: OCI A1 retry
+
+# 노트북 꺼도 GitHub 서버가 대신 capacity를 기다림.
+# 15분마다 1회 시도 → 성공하면 텔레그램 알림 + (수동) 워크플로우 비활성화.
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # 15분마다 (GitHub 부하에 따라 지연될 수 있음)
+  workflow_dispatch: {}        # Actions 탭에서 수동 실행 버튼
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install oci python-dotenv
+
+      - name: Try create OCI A1 instance (once)
+        env:
+          OCI_USER_OCID:      ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID:   ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT:    ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION:         ${{ secrets.OCI_REGION }}
+          OCI_PRIVATE_KEY:    ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+          OCI_SUBNET_ID:      ${{ secrets.OCI_SUBNET_ID }}
+          SSH_PUBLIC_KEY:     ${{ secrets.SSH_PUBLIC_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python create_oci_instance.py --once
