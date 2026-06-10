@@ -2,14 +2,20 @@
 """OCI A1 Flex instance auto-creation script - retries until capacity available."""
 
 import oci
+import os
 import time
 import sys
 import urllib.request
 import json
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 OCI_CONFIG_FILE  = r"C:\Users\sotus\.oci\config"
-TELEGRAM_BOT_TOKEN = "8897005342:AAHnzvH4NhOoCenQHXerJGGHjgqmbyQoDDo"
-TELEGRAM_CHAT_ID   = "8145739296"
+# secret은 .env에서 로드 (코드에 하드코딩 금지)
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 COMPARTMENT_ID   = "ocid1.tenancy.oc1..aaaaaaaaotmasgjymixa7bnezxjel5oocbjg473i3yh6yvvmj3fgbb5htvjq"
 SUBNET_ID        = "ocid1.subnet.oc1.ap-chuncheon-1.aaaaaaaafbk7c6rdytg4q5yqlczpr4ug2gop6fzkcuwqmtczs5wy7pa22m4q"
 SSH_KEY_FILE     = r"C:\Users\sotus\.ssh\ots_oracle.pub"
