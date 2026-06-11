@@ -7,10 +7,15 @@ on:
     - cron: "*/5 * * * *"    # 5분마다 (GitHub cron 최소 간격). 각 run이 내부에서 30초 간격 재시도 → 사실상 연속
   workflow_dispatch: {}        # Actions 탭에서 수동 실행 버튼
 
+# 동시에 한 개만 실행 (긴 hunt가 여러 개 겹쳐 도는 것 방지)
+concurrency:
+  group: oci-retry
+  cancel-in-progress: false
+
 jobs:
   provision:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 350    # 각 run이 최대 ~5시간 연속 hunt (GitHub-hosted 잡 최대 6h)
     steps:
       - uses: actions/checkout@v4
 
@@ -33,5 +38,5 @@ jobs:
           SSH_PUBLIC_KEY:     ${{ secrets.SSH_PUBLIC_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          OCI_RETRY_INTERVAL: "30"
-        run: python create_oci_instance.py --max-seconds 270
+          OCI_RETRY_INTERVAL: "60"
+        run: python create_oci_instance.py --max-seconds 18000   # ~5시간 연속 hunt
