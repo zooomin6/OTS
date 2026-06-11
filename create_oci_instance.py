@@ -157,7 +157,7 @@ def main():
             sys.exit(0)
         except oci.exceptions.ServiceError as e:
             msg = getattr(e, "message", str(e))
-            if "Out of host capacity" in msg or e.status in (429, 500):
+            if "Out of host capacity" in msg or e.status in (429, 500, 503):
                 print("out of capacity")
                 if args.once and i >= len(ads):
                     sys.exit(0)
@@ -170,8 +170,14 @@ def main():
                 print(f"FATAL (HTTP {e.status}): {msg}")
                 sys.exit(1)
         except Exception as e:
-            print(f"FATAL: {e}")
-            sys.exit(1)
+            # 네트워크 일시 끊김(connection aborted 등) → 치명적 아님. 재시도 (워크플로우 안 죽임)
+            print(f"일시 오류, 재시도: {e}")
+            if args.once and i >= len(ads):
+                sys.exit(0)
+            if args.max_seconds and (time.time() - start_t) >= args.max_seconds:
+                sys.exit(0)
+            if not args.once:
+                time.sleep(RETRY_INTERVAL)
 
 
 if __name__ == "__main__":
