@@ -157,7 +157,13 @@ def main():
             sys.exit(0)
         except oci.exceptions.ServiceError as e:
             msg = getattr(e, "message", str(e))
-            if "Out of host capacity" in msg or e.status in (429, 500, 503):
+            # 2026-06-23 트라이얼 종료 후 capacity 부족 시 오라클이 "Out of host capacity" 대신
+            # 이 404 메시지로 응답하기 시작함 (콘솔에서도 A1.Flex가 목록에 안 보이는 것으로 확인) — 치명적 아님.
+            if (
+                "Out of host capacity" in msg
+                or "Authorization failed or requested resource not found" in msg
+                or e.status in (404, 429, 500, 503)
+            ):
                 print("out of capacity")
                 if args.once and i >= len(ads):
                     sys.exit(0)
