@@ -166,40 +166,6 @@ services:
       - .:/app
     command: python -m price_monitor.monitor
 
-  news-crawler:
-    build:
-      context: .
-      dockerfile: Dockerfile.analysis
-    container_name: coin_news_crawler
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - .:/app
-    command: python -m news.news_crawler
-
-  briefing:
-    build:
-      context: .
-      dockerfile: Dockerfile.analysis
-    container_name: coin_briefing
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - .:/app
-    command: python briefing/daily_briefing.py
-
   market-watch:
     build:
       context: .

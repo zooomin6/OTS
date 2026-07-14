@@ -14,8 +14,11 @@ import asyncio
 import os
 import sys
 import time
+from functools import partial
 
 from dotenv import load_dotenv
+
+from notification.send_telegram import send_telegram
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -25,7 +28,6 @@ load_dotenv()
 DATABASE_URL       = os.environ.get("DATABASE_URL", "")
 REDIS_URL          = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 BYBIT_TESTNET      = os.environ.get("BYBIT_TESTNET", "true").lower() == "true"
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 RELOAD_INTERVAL    = 60    # 초: DB 재조회 주기
@@ -328,23 +330,7 @@ def _mark_as_sent(alert_id: int) -> None:
 
 # ── Telegram ──────────────────────────────────────────────────
 
-async def _send_telegram(text: str) -> None:
-    import httpx
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id":    TELEGRAM_CHAT_ID,
-                    "text":       text,
-                    "parse_mode": "Markdown",
-                },
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"[monitor] Telegram 발송 실패: {e}")
+_send_telegram = partial(send_telegram, log_prefix="monitor")
 
 
 # ── 알림 메시지 구성 ───────────────────────────────────────────

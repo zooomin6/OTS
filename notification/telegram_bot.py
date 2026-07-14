@@ -9,15 +9,20 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 
-import httpx
 from dotenv import load_dotenv
+
+from notification.send_telegram import send_telegram
 
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 DATABASE_URL       = os.environ.get("DATABASE_URL", "")
+REDIS_URL          = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+CONFIRM_TTL        = 600  # 초: SEMI_AUTO 승인 결과 Redis 보관 시간 (executor 대기시간보다 넉넉히)
 
 SIGNAL_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}
 
@@ -117,6 +122,11 @@ def _db_connect():
         dbname=p.path.lstrip("/"),
         options="-c client_encoding=UTF8",
     )
+
+
+def _redis_client():
+    import redis as redis_lib
+    return redis_lib.from_url(REDIS_URL, decode_responses=True)
 
 
 def _get_user_profile(telegram_user_id: int) -> dict | None:
@@ -476,21 +486,7 @@ async def send_text(message: str) -> None:
     await _send(message)
 
 
-async def _send(text: str) -> None:
-    """Telegram Bot API로 메시지를 발송한다."""
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id":    TELEGRAM_CHAT_ID,
-                    "text":       text,
-                    "parse_mode": "Markdown",
-                },
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"[telegram] 발송 실패: {e}")
+_send = partial(send_telegram, log_prefix="telegram")
 
 
 # ── 온보딩 ────────────────────────────────────────────────────
@@ -1063,6 +1059,35 @@ async def _callback_feedback(update, context) -> None:
 
     elif action == "done":
         await query.answer("이미 처리됐습니다.")
+
+
+async def _callback_confirm(update, context) -> None:
+    """SEMI_AUTO 주문 승인(✅)/거절(❌) 버튼 처리.
+
+    Redis `exec_confirm:{alert_id}`에 'ok'/'no'를 써서 대기 중인 trade_executor에 전달한다.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split(":")  # exec:ok:123 / exec:no:123 / exec:done
+    if parts[1] == "done":
+        return  # 이미 처리된 버튼
+    _, action, alert_id = parts
+    decision = "ok" if action == "ok" else "no"
+    try:
+        _redis_client().setex(f"exec_confirm:{alert_id}", CONFIRM_TTL, decision)
+    except Exception as e:
+        await query.answer(f"전달 실패: {e}", show_alert=True)
+        return
+
+    label = "✅ 승인됨 — 주문 진행" if decision == "ok" else "❌ 거절됨 — 주문 취소"
+    await query.edit_message_reply_markup(
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(label, callback_data="exec:done")
+        ]])
+    )
 
 
 def _get_analysis_by_id(analysis_id: int) -> dict | None:
@@ -1848,6 +1873,7 @@ def run_bot() -> None:
     app.add_handler(CallbackQueryHandler(_callback_scenario, pattern="^scenario:"))
     app.add_handler(CallbackQueryHandler(_callback_setmode,  pattern="^setmode:"))
     app.add_handler(CallbackQueryHandler(_callback_feedback,  pattern="^fb:"))
+    app.add_handler(CallbackQueryHandler(_callback_confirm,   pattern="^exec:"))
 
     # 포지션 스크린샷 → 시나리오 매칭
     app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))

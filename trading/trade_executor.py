@@ -15,20 +15,23 @@ import asyncio
 import os
 import sys
 import time
+from functools import partial
 
 from dotenv import load_dotenv
+
+from notification.send_telegram import send_telegram
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 load_dotenv()
 
-DATABASE_URL       = os.environ.get("DATABASE_URL", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+REDIS_URL    = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
-POLL_INTERVAL     = 3    # 초: TRIGGERED alert 폴링 주기
-SEMI_AUTO_TIMEOUT = 300  # 초: SEMI_AUTO 버튼 대기 최대 시간 (5분)
+POLL_INTERVAL       = 3    # 초: TRIGGERED alert 폴링 주기
+SEMI_AUTO_TIMEOUT   = 300  # 초: SEMI_AUTO 버튼 대기 최대 시간 (5분)
+CONFIRM_POLL_INTERVAL = 2  # 초: SEMI_AUTO 승인 여부 Redis 확인 주기
 
 # 코인별 자산 배분 비율 (바이빗 실제 잔고 기준)
 COIN_ALLOCATION = {"BTC": 0.50, "ETH": 0.50}
@@ -52,6 +55,11 @@ def _db_connect():
         dbname=p.path.lstrip("/"),
         options="-c client_encoding=UTF8",
     )
+
+
+def _redis_client():
+    import redis as redis_lib
+    return redis_lib.from_url(REDIS_URL, decode_responses=True)
 
 
 def _get_trading_mode() -> str:
@@ -325,23 +333,7 @@ def _get_lowest_support(analysis_id: int) -> float | None:
 
 # ── Telegram ──────────────────────────────────────────────────
 
-async def _send_telegram(text: str) -> None:
-    import httpx
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id":    TELEGRAM_CHAT_ID,
-                    "text":       text,
-                    "parse_mode": "Markdown",
-                },
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"[executor] Telegram 발송 실패: {e}")
+_send_telegram = partial(send_telegram, log_prefix="executor")
 
 
 # ── 주문 계산 ─────────────────────────────────────────────────
@@ -600,7 +592,7 @@ async def _execute_alert(alert: dict, mode: str) -> None:
 
     # SEMI_AUTO — 텔레그램 버튼 대기
     if mode == "SEMI_AUTO":
-        confirmed = await _wait_for_confirmation(coin, signal, price, qty, leverage)
+        confirmed = await _wait_for_confirmation(alert["id"], coin, signal, price, qty, leverage)
         if not confirmed:
             await _send_telegram(f"❌ *{coin} 주문 취소* (시간 초과 또는 거절)")
             _mark_alert_processed(alert["id"])
@@ -665,16 +657,39 @@ async def _execute_alert(alert: dict, mode: str) -> None:
 
 
 async def _wait_for_confirmation(
-    coin: str, signal: str, price: float, qty: float, leverage: int
+    alert_id: int, coin: str, signal: str, price: float, qty: float, leverage: int
 ) -> bool:
-    """SEMI_AUTO: 텔레그램 알림 발송 후 대기. TODO: 인라인 버튼 연동."""
+    """SEMI_AUTO: 승인/거절 버튼을 보내고 텔레그램 봇의 응답을 Redis로 대기한다.
+
+    봇(telegram_bot)이 버튼 클릭 시 `exec_confirm:{alert_id}` 키에 'ok'/'no'를 쓴다.
+    시간 초과(SEMI_AUTO_TIMEOUT)면 미승인으로 간주해 취소한다.
+    """
+    key = f"exec_confirm:{alert_id}"
+    r = _redis_client()
+    r.delete(key)  # 이전 잔여값 제거
+
+    reply_markup = {
+        "inline_keyboard": [[
+            {"text": "✅ 승인", "callback_data": f"exec:ok:{alert_id}"},
+            {"text": "❌ 거절", "callback_data": f"exec:no:{alert_id}"},
+        ]]
+    }
     await _send_telegram(
         f"⏳ *{'매수' if signal == 'BUY' else '매도'} 확인 요청 — {coin}*\n\n"
         f"가격: `${price:,.2f}` | 수량: `{qty}` | 레버리지: `{leverage}x`\n\n"
-        f"_(SEMI_AUTO: 5분 내 응답 없으면 자동 취소)_"
+        f"_(SEMI_AUTO: 5분 내 응답 없으면 자동 취소)_",
+        reply_markup=reply_markup,
     )
-    await asyncio.sleep(SEMI_AUTO_TIMEOUT)
-    return False  # TODO: 버튼 연동 전까지 항상 취소
+
+    waited = 0
+    while waited < SEMI_AUTO_TIMEOUT:
+        await asyncio.sleep(CONFIRM_POLL_INTERVAL)
+        waited += CONFIRM_POLL_INTERVAL
+        decision = r.get(key)
+        if decision is not None:
+            r.delete(key)
+            return decision == "ok"
+    return False  # 시간 초과 → 미승인
 
 
 # ── 실행 루프 ─────────────────────────────────────────────────

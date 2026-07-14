@@ -15,13 +15,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from functools import partial
+
 from dotenv import load_dotenv
+
+from notification.send_telegram import send_telegram
 
 load_dotenv()
 
-DATABASE_URL       = os.environ.get("DATABASE_URL", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
 # ── DB ────────────────────────────────────────────────────────
@@ -142,19 +144,7 @@ def _save_trade(
 
 # ── Telegram ──────────────────────────────────────────────────
 
-async def _send_telegram(text: str) -> None:
-    import httpx
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"[sync] Telegram 발송 실패: {e}")
+_send_telegram = partial(send_telegram, log_prefix="sync")
 
 
 # ── 핵심 로직 ─────────────────────────────────────────────────

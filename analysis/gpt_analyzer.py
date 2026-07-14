@@ -15,6 +15,8 @@ if sys.platform == "win32":
 
 from dotenv import load_dotenv
 
+from notification.send_telegram import send_telegram
+
 load_dotenv()
 
 KAFKA_BOOTSTRAP    = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
@@ -641,6 +643,7 @@ def _save_analysis_sync(
     absolute_stop: float | None,
     stop_loss_price: float | None,
     take_profit_price: float | None,
+    take_profit_price_2: float | None,
     short_entry_price: float | None,
     short_stop_loss: float | None,
     risk_reward_ratio: float | None,
@@ -666,7 +669,7 @@ def _save_analysis_sync(
                     timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
-                    absolute_stop, stop_loss_price, take_profit_price,
+                    absolute_stop, stop_loss_price, take_profit_price, take_profit_price_2,
                     short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
                     summary, invalidation, scenario_json, raw_response,
@@ -677,7 +680,7 @@ def _save_analysis_sync(
                     %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
-                    %s, %s, %s,
+                    %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s::jsonb, %s,
@@ -690,7 +693,7 @@ def _save_analysis_sync(
                     timeframe, is_reference_only,
                     youtuber_zone_low, youtuber_zone_high,
                     entry_price_1, entry_price_2, entry_price_3, entry_price_4,
-                    absolute_stop, stop_loss_price, take_profit_price,
+                    absolute_stop, stop_loss_price, take_profit_price, take_profit_price_2,
                     short_entry_price, short_stop_loss,
                     risk_reward_ratio, current_rsi, rsi_signal, volume_signal, fib_level,
                     summary, invalidation,
@@ -1097,15 +1100,7 @@ def _get_user_risk_sync() -> str:
         return "MODERATE"
 
 
-async def _send_telegram_text(text: str) -> None:
-    """단순 텍스트 메시지를 Telegram으로 전송한다."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    import httpx
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(url, json=payload)
+_send_telegram_text = functools.partial(send_telegram, log_prefix="analyzer")
 
 
 async def _send_telegram(
@@ -1303,6 +1298,7 @@ async def _process(msg_value: bytes) -> None:
             result["absolute_stop"],
             result["stop_loss_price"],
             result["take_profit_price"],
+            result["take_profit_price_2"],
             result["short_entry_price"],
             result["short_stop_loss"],
             result["risk_reward_ratio"],

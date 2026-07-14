@@ -10,18 +10,19 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from functools import partial
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from dotenv import load_dotenv
 
+from notification.send_telegram import send_telegram
+
 load_dotenv()
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
-REDIS_URL          = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-DATABASE_URL       = os.environ.get("DATABASE_URL", "")
+REDIS_URL    = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 POLL_INTERVAL_USDT_D = 60   # 초: CoinGecko 폴링 주기
 POLL_INTERVAL_BTC    = 30   # 초: Bybit 폴링 주기
@@ -77,19 +78,8 @@ def _del_flag(key: str) -> None:
 # ── Telegram ──────────────────────────────────────────────────
 
 async def _send(text: str) -> None:
-    import httpx
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"},
-                timeout=10,
-            )
-            print(f"[market_watch] 알림 발송: {text[:60]}...")
-        except Exception as e:
-            print(f"[market_watch] 텔레그램 발송 실패: {e}")
+    await send_telegram(text, log_prefix="market_watch")
+    print(f"[market_watch] 알림 발송: {text[:60]}...")
 
 
 # ── 데이터 수집 ────────────────────────────────────────────────

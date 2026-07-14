@@ -17,7 +17,6 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
-    Time,
     UniqueConstraint,
     text,
 )
@@ -78,6 +77,7 @@ class Analysis(Base):
     absolute_stop      : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)  # 마지노선
     stop_loss_price    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     take_profit_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    take_profit_price_2: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     short_entry_price  : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     short_stop_loss    : Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
     risk_reward_ratio  : Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
@@ -157,31 +157,6 @@ class VideoMemo(Base):
     created_at: Mapped[datetime]     = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
     post: Mapped[Optional[Post]] = relationship("Post", back_populates="video_memos")
-
-
-class NewsArticle(Base):
-    __tablename__ = "news_articles"
-    __table_args__ = (
-        CheckConstraint("sentiment IN ('BULLISH', 'BEARISH', 'NEUTRAL')", name="news_sentiment_check"),
-        CheckConstraint("impact_level IN ('HIGH', 'MEDIUM', 'LOW')", name="news_impact_check"),
-        Index("idx_news_published_at", "published_at"),
-        Index("idx_news_source", "source"),
-        Index("idx_news_impact", "impact_level"),
-    )
-
-    id            : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source        : Mapped[str]               = mapped_column(String(50), nullable=False)
-    external_id   : Mapped[Optional[str]]     = mapped_column(String(255), nullable=True, unique=True)
-    title         : Mapped[str]               = mapped_column(Text, nullable=False)
-    summary       : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    url           : Mapped[str]               = mapped_column(Text, nullable=False)
-    published_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False)
-    sentiment     : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
-    impact_level  : Mapped[Optional[str]]     = mapped_column(String(10), nullable=True)
-    related_coins : Mapped[Any]               = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
-    gpt_analysis  : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    is_processed  : Mapped[bool]              = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
-    collected_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
 
 class UserProfile(Base):
@@ -322,25 +297,6 @@ class CustomAlert(Base):
     status       : Mapped[str]               = mapped_column(String(10), nullable=False, server_default=text("'PENDING'"))
     triggered_at : Mapped[Optional[datetime]]= mapped_column(DateTime, nullable=True)
     created_at   : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
-
-
-class EconomicCalendar(Base):
-    __tablename__ = "economic_calendars"
-    __table_args__ = (
-        CheckConstraint("importance IN ('HIGH', 'MEDIUM', 'LOW')", name="econ_cal_importance_check"),
-        Index("idx_econ_cal_event_date", "event_date"),
-        Index("idx_econ_cal_importance", "importance"),
-    )
-
-    id          : Mapped[int]               = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source      : Mapped[str]               = mapped_column(String(50), nullable=False, server_default=text("'finnhub'"))
-    external_id : Mapped[Optional[str]]     = mapped_column(String(255), nullable=True, unique=True)
-    event_name  : Mapped[str]               = mapped_column(Text, nullable=False)
-    event_date  : Mapped[date]              = mapped_column(Date, nullable=False)
-    event_time  : Mapped[Optional[Any]]     = mapped_column(Time, nullable=True)
-    importance  : Mapped[str]               = mapped_column(String(10), nullable=False)
-    description : Mapped[Optional[str]]     = mapped_column(Text, nullable=True)
-    created_at  : Mapped[datetime]          = mapped_column(DateTime, nullable=False, server_default=text("NOW()"))
 
 
 class Settings(Base):
